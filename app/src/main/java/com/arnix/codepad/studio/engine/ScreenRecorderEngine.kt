@@ -538,6 +538,8 @@ class ScreenRecordingService : Service() {
                 override fun onStop() {
                     Log.i(TAG, "MediaProjection stopped by system")
                     stopRecording()
+                    try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
+                    stopSelf()
                 }
             }
             projectionCallback = callback
@@ -620,18 +622,47 @@ class ScreenRecordingService : Service() {
         val duration = recordedSeconds
         val file = currentOutputFile
 
+        // 1. Release VirtualDisplay FIRST so frames stop feeding into recorder surface
+        try {
+            virtualDisplay?.release()
+            virtualDisplay = null
+        } catch (e: Exception) {
+            Log.w(TAG, "virtualDisplay release error", e)
+        }
+
+        // 2. Unregister callback and stop MediaProjection
+        try {
+            projectionCallback?.let { mediaProjection?.unregisterCallback(it) }
+            projectionCallback = null
+            mediaProjection?.stop()
+            mediaProjection = null
+        } catch (e: Exception) {
+            Log.w(TAG, "mediaProjection stop error", e)
+        }
+
+        // 3. Small pause to allow hardware encoder to write remaining frames & trailer safely
+        try {
+            Thread.sleep(150L)
+        } catch (_: Exception) {}
+
+        // 4. Safely stop & release MediaRecorder
         try {
             mediaRecorder?.stop()
         } catch (e: Exception) {
-            Log.e(TAG, "Error stopping MediaRecorder", e)
+            Log.w(TAG, "MediaRecorder stop warning: ${e.message}")
         }
+        try {
+            mediaRecorder?.reset()
+            mediaRecorder?.release()
+        } catch (_: Throwable) {}
+        mediaRecorder = null
 
-        cleanup()
-
-        if (file != null && file.exists() && file.length() > 2048) {
+        // 5. Finalize output file and notify UI immediately
+        if (file != null && file.exists() && file.length() > 0) {
             var finalFile = file
             val targetDir = resolveCodePadStorageDir(applicationContext)
             val preferredFile = File(targetDir, file.name)
+            val recordedBytes = file.length()
 
             // Transfer to target /storage/emulated/0/CodePad/ or /storage/emulated/0/Record/CodePad/
             if (file.absolutePath != preferredFile.absolutePath) {
@@ -650,41 +681,46 @@ class ScreenRecordingService : Service() {
                 }
             }
 
-            // Index file into Android MediaStore so it appears in device Gallery
-            MediaScannerConnection.scanFile(
-                applicationContext,
-                arrayOf(finalFile.absolutePath),
-                arrayOf("video/mp4")
-            ) { _, uri ->
-                val contentUri = uri ?: try {
-                    FileProvider.getUriForFile(
-                        applicationContext,
-                        "${applicationContext.packageName}.fileprovider",
-                        finalFile
-                    )
-                } catch (_: Exception) {
-                    Uri.fromFile(finalFile)
-                }
-
-                val savedInfo = SavedRecordingInfo(
-                    filePath = finalFile.absolutePath,
-                    fileUri = contentUri,
-                    fileName = finalFile.name,
-                    durationSeconds = duration,
-                    fileSizeBytes = finalFile.length(),
-                    width = 1080,
-                    height = 1920
+            val contentUri = try {
+                FileProvider.getUriForFile(
+                    applicationContext,
+                    "${applicationContext.packageName}.fileprovider",
+                    finalFile
                 )
-                ScreenRecorderEngine.updateState {
-                    it.copy(
-                        isRecording = false,
-                        isPreparing = false,
-                        durationSeconds = 0,
-                        currentFilePath = null,
-                        lastSavedRecording = savedInfo
-                    )
-                }
+            } catch (_: Exception) {
+                Uri.fromFile(finalFile)
             }
+
+            val savedInfo = SavedRecordingInfo(
+                filePath = finalFile.absolutePath,
+                fileUri = contentUri,
+                fileName = finalFile.name,
+                durationSeconds = kotlin.math.max(1, duration),
+                fileSizeBytes = finalFile.length().coerceAtLeast(recordedBytes),
+                width = 1080,
+                height = 1920
+            )
+
+            // CRITICAL: Update state SYNCHRONOUSLY so dialog pops up immediately
+            ScreenRecorderEngine.updateState {
+                it.copy(
+                    isRecording = false,
+                    isPreparing = false,
+                    durationSeconds = 0,
+                    currentFilePath = null,
+                    lastSavedRecording = savedInfo
+                )
+            }
+
+            // Index into MediaStore in background without blocking
+            try {
+                MediaScannerConnection.scanFile(
+                    applicationContext,
+                    arrayOf(finalFile.absolutePath),
+                    arrayOf("video/mp4"),
+                    null
+                )
+            } catch (_: Exception) {}
         } else {
             ScreenRecorderEngine.updateState {
                 it.copy(

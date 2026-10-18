@@ -2597,58 +2597,6 @@ private fun RecordingFlowSectionContent(
                 modifier = Modifier.testTag("more_keep_preview_switch")
             )
         }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column {
-                Text(
-                    text = "Reveal Live Output Preview on Finish",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = "Automatically pops up finished web UI when typing completes",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Switch(
-                checked = autoRevealPreview,
-                onCheckedChange = { onToggleAutoReveal() },
-                modifier = Modifier.testTag("more_autoreveal_switch")
-            )
-        }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column {
-                Text(
-                    text = "Keep Floating Preview in Record Mode",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = "Keeps live DOM window visible during fullscreen recording",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Switch(
-                checked = keepPreviewInRecord,
-                onCheckedChange = { onToggleKeepPreviewInRecord() },
-                modifier = Modifier.testTag("more_keep_preview_switch")
-            )
-        }
     }
 }
 
