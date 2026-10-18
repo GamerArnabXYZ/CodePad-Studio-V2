@@ -1,0 +1,199 @@
+name: Auto Build & Release APKs (Debug-Signed)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Custom release tag (optional, e.g. v1.0.0). Leave empty for auto tag."
+        required: false
+        default: ""
+      release_name:
+        description: "Custom release title (optional)"
+        required: false
+        default: ""
+      prerelease:
+        description: "Mark GitHub Release as pre-release"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build Release APKs (Universal, ARMv7, ARMv8, x86_64) & Publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Prepare .env File for Secrets Plugin
+        run: |
+          if [ ! -f .env ]; then
+            if [ -f .env.example ]; then
+              cp .env.example .env
+            else
+              touch .env
+            fi
+          fi
+
+      - name: Prepare Debug Keystore for Release APK Signing
+        run: |
+          if [ -f debug.keystore.base64 ]; then
+            echo "Decoding debug.keystore.base64..."
+            base64 -d debug.keystore.base64 > debug.keystore
+          elif [ ! -f debug.keystore ]; then
+            echo "Generating standard Android debug.keystore..."
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+          # Clone the debug key into alias 'upload' so signingConfigs.release
+          # signs all Release APKs using the exact same Debug Key.
+          rm -f debug-release.keystore
+          keytool -importkeystore \
+            -srckeystore debug.keystore \
+            -destkeystore debug-release.keystore \
+            -srcstorepass android \
+            -deststorepass android \
+            -srcalias androiddebugkey \
+            -destalias upload \
+            -srckeypass android \
+            -destkeypass android \
+            -noprompt
+
+      - name: Build Release APKs (Universal, ARMv7, ARMv8, x86_64)
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/debug-release.keystore
+          STORE_PASSWORD: android
+          KEY_PASSWORD: android
+        run: |
+          gradle :app:assembleRelease -PenableAbiSplits=true --no-daemon --stacktrace
+
+      - name: Collect & Rename Release APKs by Architecture
+        id: collect_apks
+        run: |
+          mkdir -p release-apks
+          APK_DIR="app/build/outputs/apk/release"
+
+          echo "Generated files in ${APK_DIR}:"
+          ls -lh "${APK_DIR}"
+
+          APP_PREFIX="CodePad-Studio"
+
+          # 1. Universal APK
+          UNIVERSAL_SRC=$(find "${APK_DIR}" -maxdepth 1 -name "*universal*release*.apk" | head -n 1)
+          if [ -z "${UNIVERSAL_SRC}" ]; then
+            UNIVERSAL_SRC=$(find "${APK_DIR}" -maxdepth 1 -name "*release*.apk" | head -n 1)
+          fi
+          cp "${UNIVERSAL_SRC}" "release-apks/${APP_PREFIX}-universal-release.apk"
+
+          # 2. ARMv7 (armeabi-v7a) APK
+          ARMV7_SRC=$(find "${APK_DIR}" -maxdepth 1 -name "*armeabi-v7a*release*.apk" | head -n 1)
+          if [ -n "${ARMV7_SRC}" ]; then
+            cp "${ARMV7_SRC}" "release-apks/${APP_PREFIX}-ARMv7-armeabi-v7a-release.apk"
+          else
+            cp "${UNIVERSAL_SRC}" "release-apks/${APP_PREFIX}-ARMv7-armeabi-v7a-release.apk"
+          fi
+
+          # 3. ARMv8 (arm64-v8a) APK
+          ARMV8_SRC=$(find "${APK_DIR}" -maxdepth 1 -name "*arm64-v8a*release*.apk" | head -n 1)
+          if [ -n "${ARMV8_SRC}" ]; then
+            cp "${ARMV8_SRC}" "release-apks/${APP_PREFIX}-ARMv8-arm64-v8a-release.apk"
+          else
+            cp "${UNIVERSAL_SRC}" "release-apks/${APP_PREFIX}-ARMv8-arm64-v8a-release.apk"
+          fi
+
+          # 4. x86_64 APK
+          X86_64_SRC=$(find "${APK_DIR}" -maxdepth 1 -name "*x86_64*release*.apk" | head -n 1)
+          if [ -n "${X86_64_SRC}" ]; then
+            cp "${X86_64_SRC}" "release-apks/${APP_PREFIX}-x86_64-release.apk"
+          else
+            cp "${UNIVERSAL_SRC}" "release-apks/${APP_PREFIX}-x86_64-release.apk"
+          fi
+
+          # Generate SHA-256 checksums for all 4 APKs
+          cd release-apks
+          sha256sum *.apk > SHA256SUMS.txt
+          ls -lh
+          cat SHA256SUMS.txt
+
+      - name: Determine Release Tag & Metadata
+        id: release_meta
+        run: |
+          if [ -n "${{ github.event.inputs.release_tag }}" ]; then
+            TAG="${{ github.event.inputs.release_tag }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="v1.0.${{ github.run_number }}"
+          fi
+
+          if [ -n "${{ github.event.inputs.release_name }}" ]; then
+            TITLE="${{ github.event.inputs.release_name }}"
+          else
+            TITLE="CodePad Studio ${TAG} (Release APKs)"
+          fi
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APKs as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodePad-Studio-Release-APKs-${{ steps.release_meta.outputs.tag }}
+          path: |
+            release-apks/*.apk
+            release-apks/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish APKs to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          name: ${{ steps.release_meta.outputs.title }}
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+          generate_release_notes: true
+          body: |
+            ### 📦 CodePad Studio — Debug-Signed Release APKs
+            Automated Release build signed with the Android Debug Key (`androiddebugkey`).
+
+            #### 📲 Available APK Variants
+            - **Universal (`CodePad-Studio-universal-release.apk`)** — Works on all Android devices & emulators (ARMv7, ARMv8, x86_64).
+            - **ARMv8 64-bit (`CodePad-Studio-ARMv8-arm64-v8a-release.apk`)** — Recommended for modern 64-bit Android phones/tablets.
+            - **ARMv7 32-bit (`CodePad-Studio-ARMv7-armeabi-v7a-release.apk`)** — For older 32-bit ARM Android devices.
+            - **x86_64 (`CodePad-Studio-x86_64-release.apk`)** — For Android Studio Emulators, PC/Chromebook x86_64 targets.
+          files: |
+            release-apks/CodePad-Studio-universal-release.apk
+            release-apks/CodePad-Studio-ARMv7-armeabi-v7a-release.apk
+            release-apks/CodePad-Studio-ARMv8-arm64-v8a-release.apk
+            release-apks/CodePad-Studio-x86_64-release.apk
+            release-apks/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

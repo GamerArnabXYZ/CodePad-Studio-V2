@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">CodePad Studio</string>
+    <string name="tab_codepad_studio">CodePad Studio</string>
+    <string name="tab_auto_write_studio">Auto Write Studio</string>
+    <string name="status_saved">Saved</string>
+    <string name="status_unsaved">Unsaved</string>
+    <string name="action_format_code">Format Code</string>
+    <string name="action_toggle_preview">Toggle Live Preview</string>
+    <string name="action_toggle_console">Toggle Console</string>
+    <string name="action_export_project">Export Project</string>
+    <string name="action_editor_settings">Editor Settings</string>
+    <string name="action_edit_project_name">Edit Project Name</string>
+    <string name="export_html_bundle">Export Single Bundled .html</string>
+    <string name="export_zip_archive">Export .zip Project Archive</string>
+    <string name="settings_font_size_label">Editor Font Size (12px – 22px)</string>
+    <string name="autowrite_speed_label">Typing Speed (Lv 1 – 20)</string>
+    <string name="autowrite_turbo_mode">TURBO 2X</string>
+    <string name="gesture_hint_single">1× Tap: Play / Pause</string>
+    <string name="gesture_hint_double">2× Tap: Floating Preview</string>
+    <string name="gesture_hint_triple">3× Tap: Recording Mode</string>
+    <string name="completion_badge_title">SYNTHESIS COMPLETE // 100%</string>
+    <string name="completion_badge_subtitle">All source modules compiled &amp; animated at zero latency.</string>
+</resources>

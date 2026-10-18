@@ -1,0 +1,6 @@
+{
+  "name": "CodePad Studio",
+  "description": "Pure Native Android Cyberpunk IDE (CodePad Studio) and Typewriter Code Animation Engine (Auto Write Studio) built with Kotlin and Jetpack Compose.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
