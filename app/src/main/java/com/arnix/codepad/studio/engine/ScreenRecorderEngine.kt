@@ -414,17 +414,16 @@ class ScreenRecordingService : Service() {
                 Build.HARDWARE.contains("goldfish") ||
                 Build.HARDWARE.contains("ranchu")
 
-            // 1. Calculate sanitized dimensions: strictly divisible by 16 for H.264 profile stability
+            // 1. Calculate sanitized dimensions: strictly divisible by 16 within H.264 profile limits
             val rawW = if (width > 0) width else 720
             val rawH = if (height > 0) height else 1280
-            val aspectRatio = rawH.toFloat() / rawW.toFloat().coerceAtLeast(1f)
 
-            var targetW = if (isEmulator || !prefer1080p) 720 else 1080
-            var targetH = (targetW * aspectRatio).toInt()
+            val maxW = if (isEmulator || !prefer1080p) 720 else 1080
+            val maxH = if (isEmulator || !prefer1080p) 1280 else 1920
 
-            // Align to multiple of 16
-            targetW = (targetW / 16) * 16
-            targetH = (targetH / 16) * 16
+            val scale = minOf(maxW.toFloat() / rawW.toFloat(), maxH.toFloat() / rawH.toFloat(), 1.0f)
+            var targetW = ((rawW * scale).toInt() / 16) * 16
+            var targetH = ((rawH * scale).toInt() / 16) * 16
 
             if (targetW < 320) targetW = 720
             if (targetH < 320) targetH = 1280

@@ -378,7 +378,7 @@ data class StudioUiState(
     // Start Delay after Countdown & In-App Recording
     val recordingStartDelayMs: Long = 1000L,
     val isRecordingStartingDelay: Boolean = false,
-    val isAutoRecordInApp: Boolean = false,
+    val isAutoRecordInApp: Boolean = true,
     val isSavedVideoDialogOpen: Boolean = false,
     val recorderPrefer1080p: Boolean = true,
     val recorderPrefer60Fps: Boolean = true,
@@ -1899,8 +1899,8 @@ class StudioViewModel(
                 }
                 _uiState.update { it.copy(recordingCountdownSeconds = 0, isRecordingStartingDelay = false) }
 
-                // Screen recording ONLY starts here, after countdown and delay have completed!
-                if (_uiState.value.isAutoRecordInApp && !ScreenRecorderEngine.state.value.isRecording) {
+                // Screen recording starts after countdown and delay
+                if (!ScreenRecorderEngine.state.value.isRecording) {
                     pendingInAppRecorderLaunch?.invoke()
                 }
                 pendingInAppRecorderLaunch = null
@@ -1914,8 +1914,7 @@ class StudioViewModel(
                     delay(startDelay)
                     _uiState.update { it.copy(isRecordingStartingDelay = false) }
 
-                    // Screen recording starts after start delay
-                    if (_uiState.value.isAutoRecordInApp && !ScreenRecorderEngine.state.value.isRecording) {
+                    if (!ScreenRecorderEngine.state.value.isRecording) {
                         pendingInAppRecorderLaunch?.invoke()
                     }
                     pendingInAppRecorderLaunch = null
@@ -1923,7 +1922,7 @@ class StudioViewModel(
                     startOrResumeAutoWrite()
                 }
             } else {
-                if (_uiState.value.isAutoRecordInApp && !ScreenRecorderEngine.state.value.isRecording) {
+                if (!ScreenRecorderEngine.state.value.isRecording) {
                     pendingInAppRecorderLaunch?.invoke()
                 }
                 pendingInAppRecorderLaunch = null

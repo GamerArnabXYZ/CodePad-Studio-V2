@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -177,6 +178,7 @@ fun AutoWriteStudioScreen(
     }
 
     var pendingCaptureToken by remember { mutableStateOf<Pair<Int, Intent>?>(null) }
+    var isCleanRecordRequested by remember { mutableStateOf(false) }
 
     val launchServiceWithToken: (Pair<Int, Intent>) -> Unit = { token ->
         val metrics = context.resources.displayMetrics
@@ -200,12 +202,21 @@ fun AutoWriteStudioScreen(
         if (result.resultCode == Activity.RESULT_OK && data != null) {
             val token = Pair(result.resultCode, data)
             pendingCaptureToken = token
-            // If not in a countdown/delay waiting state, launch immediately
-            if (!uiState.isRecordingStartingDelay && uiState.recordingCountdownSeconds == 0) {
+
+            if (isCleanRecordRequested) {
+                isCleanRecordRequested = false
+                viewModel.startCleanShortsRecording(
+                    onLaunchInAppRecorder = {
+                        launchServiceWithToken(token)
+                    }
+                )
+            } else {
                 launchServiceWithToken(token)
             }
         } else {
-            ScreenRecorderEngine.updateState { it.copy(error = "Screen recording permission was cancelled.") }
+            isCleanRecordRequested = false
+            Toast.makeText(context, "Screen recording was cancelled", Toast.LENGTH_SHORT).show()
+            ScreenRecorderEngine.updateState { it.copy(isPreparing = false, isRecording = false) }
         }
     }
 
@@ -223,34 +234,45 @@ fun AutoWriteStudioScreen(
     }
 
     val startInAppRecording: () -> Unit = {
-        val existingToken = pendingCaptureToken
-        if (existingToken != null) {
-            launchServiceWithToken(existingToken)
-        } else {
-            val permissionsToRequest = mutableListOf<String>()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                    permissionsToRequest.add(android.Manifest.permission.POST_NOTIFICATIONS)
-                }
+        val permissionsToRequest = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(android.Manifest.permission.POST_NOTIFICATIONS)
             }
-            if (uiState.recorderEnableAudio) {
-                if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                    permissionsToRequest.add(android.Manifest.permission.RECORD_AUDIO)
-                }
+        }
+        if (uiState.recorderEnableAudio) {
+            if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(android.Manifest.permission.RECORD_AUDIO)
             }
+        }
 
-            if (permissionsToRequest.isNotEmpty()) {
-                permissionLauncher.launch(permissionsToRequest.toTypedArray())
-            } else {
-                try {
-                    val intent = mediaProjectionManager?.createScreenCaptureIntent()
-                    if (intent != null) {
-                        screenCaptureLauncher.launch(intent)
-                    }
-                } catch (e: Exception) {
-                    ScreenRecorderEngine.updateState { it.copy(error = "Screen recorder unavailable: ${e.message}") }
+        if (permissionsToRequest.isNotEmpty()) {
+            permissionLauncher.launch(permissionsToRequest.toTypedArray())
+        } else {
+            try {
+                val intent = mediaProjectionManager?.createScreenCaptureIntent()
+                if (intent != null) {
+                    screenCaptureLauncher.launch(intent)
+                } else {
+                    Toast.makeText(context, "Screen recorder not available on this device", Toast.LENGTH_SHORT).show()
                 }
+            } catch (e: Exception) {
+                ScreenRecorderEngine.updateState { it.copy(error = "Screen recorder unavailable: ${e.message}") }
             }
+        }
+    }
+
+    LaunchedEffect(recorderState.error) {
+        val err = recorderState.error
+        if (!err.isNullOrBlank()) {
+            Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+            ScreenRecorderEngine.clearError()
+        }
+    }
+
+    LaunchedEffect(recorderState.isRecording) {
+        if (!recorderState.isRecording) {
+            pendingCaptureToken = null
         }
     }
 
@@ -1074,20 +1096,10 @@ fun AutoWriteStudioScreen(
                     onSelectDurationTarget = { viewModel.selectAutoDurationTarget(it) },
                     onTogglePlayPause = { viewModel.handleSingleTapGesture() },
                     onStartCleanRecord = {
-                        // Pre-request recording permission if needed so token is ready before countdown!
-                        if (uiState.isAutoRecordInApp && pendingCaptureToken == null && !recorderState.isRecording) {
+                        if (!recorderState.isRecording) {
+                            isCleanRecordRequested = true
                             startInAppRecording()
                         }
-                        viewModel.startCleanShortsRecording(
-                            onLaunchInAppRecorder = {
-                                val token = pendingCaptureToken
-                                if (token != null) {
-                                    launchServiceWithToken(token)
-                                } else {
-                                    startInAppRecording()
-                                }
-                            }
-                        )
                     },
                     onRestart = { viewModel.restartAutoWrite() },
                     onSkipNearEnd = { viewModel.skipNearCompletionForDemo() },
@@ -1100,6 +1112,7 @@ fun AutoWriteStudioScreen(
                         if (recorderState.isRecording) {
                             ScreenRecorderEngine.stopServiceRecording(context)
                         } else {
+                            isCleanRecordRequested = false
                             startInAppRecording()
                         }
                     }
