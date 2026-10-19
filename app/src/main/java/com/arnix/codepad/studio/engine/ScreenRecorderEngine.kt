@@ -272,9 +272,14 @@ class ScreenRecordingService : Service() {
         when (intent?.action) {
             ACTION_START -> {
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
-                val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
-                } else {
+                val resultData = try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(EXTRA_RESULT_DATA)
+                    }
+                } catch (_: Throwable) {
                     @Suppress("DEPRECATION")
                     intent.getParcelableExtra(EXTRA_RESULT_DATA)
                 }
@@ -286,31 +291,37 @@ class ScreenRecordingService : Service() {
                 val bitrate = intent.getIntExtra(EXTRA_BITRATE, 3_000_000)
                 val prefer1080p = intent.getBooleanExtra(EXTRA_PREFER_1080P, false)
 
-                if (resultCode != 0 && resultData != null) {
-                    // CRITICAL FOR ANDROID 14+ (API 34+):
-                    // Must obtain MediaProjection token BEFORE calling startForeground with FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                    val projection = runCatching {
-                        mediaProjectionManager?.getMediaProjection(resultCode, resultData)
-                    }.getOrNull()
-
-                    val initialNotification = buildNotification(0)
+                // CRITICAL FOR ANDROID 14+ (API 34+):
+                // Android 14+ requires an ACTIVE foreground service with FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                // BEFORE getMediaProjection() can be called. Calling getMediaProjection() prior to startForeground()
+                // throws a SecurityException: Media projections require a foreground service of type ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION.
+                val initialNotification = buildNotification(0)
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        startForeground(
+                            NOTIFICATION_ID,
+                            initialNotification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                        )
+                    } else {
+                        startForeground(NOTIFICATION_ID, initialNotification)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "startForeground mediaProjection failed, falling back to standard FGS", e)
                     try {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            startForeground(
-                                NOTIFICATION_ID,
-                                initialNotification,
-                                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                            )
-                        } else {
-                            startForeground(NOTIFICATION_ID, initialNotification)
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "startForeground mediaProjection failed, falling back to standard FGS", e)
-                        try {
-                            startForeground(NOTIFICATION_ID, initialNotification)
-                        } catch (fgsEx: Exception) {
-                            Log.e(TAG, "Fatal startForeground error", fgsEx)
-                        }
+                        startForeground(NOTIFICATION_ID, initialNotification)
+                    } catch (fgsEx: Exception) {
+                        Log.e(TAG, "Fatal startForeground error", fgsEx)
+                    }
+                }
+
+                if (resultCode != 0 && resultData != null) {
+                    val manager = mediaProjectionManager ?: (getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager)
+                    val projection = try {
+                        manager?.getMediaProjection(resultCode, resultData)
+                    } catch (secEx: Throwable) {
+                        Log.e(TAG, "getMediaProjection failed: ${secEx.message}", secEx)
+                        null
                     }
 
                     if (projection != null) {
@@ -324,8 +335,6 @@ class ScreenRecordingService : Service() {
                     }
                 } else {
                     ScreenRecorderEngine.updateState { it.copy(error = "Recording permission was denied.") }
-                    val notification = buildNotification(0)
-                    try { startForeground(NOTIFICATION_ID, notification) } catch (_: Exception) {}
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 }
