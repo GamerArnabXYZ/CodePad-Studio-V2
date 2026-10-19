@@ -28,6 +28,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.arnix.codepad.studio.MainActivity
+import com.arnix.codepad.studio.model.RecordingAudioSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -116,6 +117,7 @@ object ScreenRecorderEngine {
         height: Int,
         densityDpi: Int,
         audioEnabled: Boolean = recordAudio,
+        audioSource: RecordingAudioSource = RecordingAudioSource.SYSTEM_ONLY,
         fps60: Boolean = prefer60Fps,
         is1080p: Boolean = prefer1080p
     ) {
@@ -124,7 +126,13 @@ object ScreenRecorderEngine {
             context,
             android.Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
-        val effectiveRecordAudio = audioEnabled && hasAudioPermission
+        val effectiveRecordAudio = if (audioSource == RecordingAudioSource.SILENT) {
+            false
+        } else if (audioSource == RecordingAudioSource.SYSTEM_ONLY) {
+            hasAudioPermission || Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        } else {
+            hasAudioPermission
+        }
 
         val intent = Intent(context, ScreenRecordingService::class.java).apply {
             action = ScreenRecordingService.ACTION_START
@@ -134,6 +142,7 @@ object ScreenRecorderEngine {
             putExtra(ScreenRecordingService.EXTRA_HEIGHT, height)
             putExtra(ScreenRecordingService.EXTRA_DENSITY, densityDpi)
             putExtra(ScreenRecordingService.EXTRA_RECORD_AUDIO, effectiveRecordAudio)
+            putExtra(ScreenRecordingService.EXTRA_AUDIO_SOURCE, audioSource.id)
             putExtra(ScreenRecordingService.EXTRA_FPS, if (fps60) 60 else 30)
             putExtra(ScreenRecordingService.EXTRA_BITRATE, if (is1080p) 4_500_000 else 2_500_000)
             putExtra(ScreenRecordingService.EXTRA_PREFER_1080P, is1080p)
@@ -204,6 +213,7 @@ class ScreenRecordingService : Service() {
         const val EXTRA_HEIGHT = "extra_height"
         const val EXTRA_DENSITY = "extra_density"
         const val EXTRA_RECORD_AUDIO = "extra_record_audio"
+        const val EXTRA_AUDIO_SOURCE = "extra_audio_source"
         const val EXTRA_FPS = "extra_fps"
         const val EXTRA_BITRATE = "extra_bitrate"
         const val EXTRA_PREFER_1080P = "extra_prefer_1080p"
@@ -255,6 +265,8 @@ class ScreenRecordingService : Service() {
     private var projectionCallback: MediaProjection.Callback? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var mediaRecorder: MediaRecorder? = null
+    private var internalAudioEngine: InternalAudioCaptureEngine? = null
+    private var stagingInternalAudioFile: File? = null
     private var currentOutputFile: File? = null
     private var timerJob: Job? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main)
@@ -290,6 +302,8 @@ class ScreenRecordingService : Service() {
                 val fps = intent.getIntExtra(EXTRA_FPS, 30)
                 val bitrate = intent.getIntExtra(EXTRA_BITRATE, 3_000_000)
                 val prefer1080p = intent.getBooleanExtra(EXTRA_PREFER_1080P, false)
+                val audioSourceId = intent.getStringExtra(EXTRA_AUDIO_SOURCE)
+                val audioSource = RecordingAudioSource.fromId(audioSourceId)
 
                 // CRITICAL FOR ANDROID 14+ (API 34+):
                 // Android 14+ requires an ACTIVE foreground service with FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
@@ -326,7 +340,7 @@ class ScreenRecordingService : Service() {
 
                     if (projection != null) {
                         mediaProjection = projection
-                        startRecording(projection, width, height, density, recordAudio, fps, bitrate, prefer1080p)
+                        startRecording(projection, width, height, density, recordAudio, audioSource, fps, bitrate, prefer1080p)
                     } else {
                         Log.e(TAG, "Failed to acquire MediaProjection token")
                         ScreenRecorderEngine.updateState { it.copy(error = "Screen recording permission was not acquired.") }
@@ -409,6 +423,7 @@ class ScreenRecordingService : Service() {
         height: Int,
         density: Int,
         recordAudio: Boolean,
+        audioSource: RecordingAudioSource,
         fps: Int,
         bitrate: Int,
         prefer1080p: Boolean
@@ -484,18 +499,65 @@ class ScreenRecordingService : Service() {
             }
 
             var audioConfigured = false
-            val shouldAttemptAudio = recordAudio && !isEmulator
+            var internalAudioActive = false
 
-            val prepareSuccess = runCatching {
-                if (shouldAttemptAudio) {
-                    try {
-                        recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
-                        audioConfigured = true
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Microphone audio not available on this device", e)
-                        audioConfigured = false
+            when (audioSource) {
+                RecordingAudioSource.SILENT -> {
+                    TypingSoundEngine.isMutedForRecording = false
+                    audioConfigured = false
+                }
+                RecordingAudioSource.MIC_ONLY -> {
+                    // Mute in-app typing sounds during recording so mic only captures voiceover cleanly
+                    TypingSoundEngine.isMutedForRecording = true
+                    if (recordAudio && !isEmulator) {
+                        try {
+                            recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+                            audioConfigured = true
+                        } catch (e: Exception) {
+                            Log.w(TAG, "MIC_ONLY audio source failed: ${e.message}")
+                            audioConfigured = false
+                        }
                     }
                 }
+                RecordingAudioSource.SYSTEM_AND_MIC -> {
+                    // Speaker plays typing sounds + microphone records voice and clicks together
+                    TypingSoundEngine.isMutedForRecording = false
+                    if (recordAudio && !isEmulator) {
+                        try {
+                            recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+                            audioConfigured = true
+                        } catch (e: Exception) {
+                            Log.w(TAG, "SYSTEM_AND_MIC audio source failed: ${e.message}")
+                            audioConfigured = false
+                        }
+                    }
+                }
+                RecordingAudioSource.SYSTEM_ONLY -> {
+                    TypingSoundEngine.isMutedForRecording = false
+                    audioConfigured = false
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !isEmulator) {
+                        val stagingDir = File(cacheDir, "recordings_staging").apply { mkdirs() }
+                        val audioTemp = File(stagingDir, "audio_internal_${System.currentTimeMillis()}.mp4")
+                        val internalEngine = InternalAudioCaptureEngine(projection, audioTemp)
+                        if (internalEngine.start()) {
+                            internalAudioEngine = internalEngine
+                            stagingInternalAudioFile = audioTemp
+                            internalAudioActive = true
+                        }
+                    }
+                    if (!internalAudioActive && recordAudio && !isEmulator) {
+                        // Fallback on pre-Q or if internal playback capture is restricted: use mic
+                        try {
+                            recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+                            audioConfigured = true
+                        } catch (_: Exception) {
+                            audioConfigured = false
+                        }
+                    }
+                }
+            }
+
+            val prepareSuccess = runCatching {
                 recorder.setVideoSource(MediaRecorder.VideoSource.SURFACE)
                 recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 if (audioConfigured) {
@@ -591,7 +653,7 @@ class ScreenRecordingService : Service() {
                     isPreparing = false,
                     durationSeconds = 0,
                     currentFilePath = file.absolutePath,
-                    isAudioEnabled = audioConfigured,
+                    isAudioEnabled = audioConfigured || internalAudioActive,
                     targetFps = if (isEmulator) 30 else fps
                 )
             }
@@ -628,7 +690,17 @@ class ScreenRecordingService : Service() {
     private fun stopRecording() {
         timerJob?.cancel()
         val duration = recordedSeconds
-        val file = currentOutputFile
+
+        // Stop internal audio engine if running
+        try {
+            internalAudioEngine?.stop()
+        } catch (e: Exception) {
+            Log.w(TAG, "internalAudioEngine stop error", e)
+        }
+        internalAudioEngine = null
+        TypingSoundEngine.isMutedForRecording = false
+
+        var file = currentOutputFile
 
         // 1. Release VirtualDisplay FIRST so frames stop feeding into recorder surface
         try {
@@ -664,6 +736,21 @@ class ScreenRecordingService : Service() {
             mediaRecorder?.release()
         } catch (_: Throwable) {}
         mediaRecorder = null
+
+        // Merge internal audio into video if captured
+        val audioStaging = stagingInternalAudioFile
+        if (file != null && file.exists() && audioStaging != null && audioStaging.exists() && audioStaging.length() > 256) {
+            val stagingDir = File(cacheDir, "recordings_staging").apply { mkdirs() }
+            val mergedFile = File(stagingDir, "merged_${file.name}")
+            val merged = InternalAudioCaptureEngine.mergeVideoAndAudio(file, audioStaging, mergedFile)
+            if (merged && mergedFile.exists() && mergedFile.length() > 0) {
+                try { file.delete() } catch (_: Exception) {}
+                file = mergedFile
+                currentOutputFile = mergedFile
+            }
+            try { audioStaging.delete() } catch (_: Exception) {}
+            stagingInternalAudioFile = null
+        }
 
         // 5. Finalize output file and notify UI immediately
         if (file != null && file.exists() && file.length() > 0) {

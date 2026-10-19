@@ -41,6 +41,9 @@ object TypingSoundEngine {
     @Volatile
     private var lastPlayTimeMs = 0L
 
+    @Volatile
+    var isMutedForRecording: Boolean = false
+
     private var audioTrack: AudioTrack? = null
     private var isInitialized = false
 
@@ -61,8 +64,8 @@ object TypingSoundEngine {
             ).coerceAtLeast(2048)
 
             val audioAttributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                 .build()
 
             val audioFormat = AudioFormat.Builder()
@@ -117,7 +120,7 @@ object TypingSoundEngine {
         pitchMultiplier: Float = 1.0f,
         stabilizerResonance: Boolean = true
     ) {
-        if (profile == TypingSoundProfile.OFF || volume <= 0.01f) return
+        if (profile == TypingSoundProfile.OFF || volume <= 0.01f || isMutedForRecording) return
 
         val now = SystemClock.uptimeMillis()
 

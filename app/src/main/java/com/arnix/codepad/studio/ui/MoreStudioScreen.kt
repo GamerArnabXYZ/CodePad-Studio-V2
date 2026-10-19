@@ -48,6 +48,10 @@ import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material3.Button
@@ -63,6 +67,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.RadioButton
+import com.arnix.codepad.studio.model.RecordingAudioSource
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -612,6 +618,7 @@ fun MoreStudioScreen(
                         isAutoRecordInApp = uiState.isAutoRecordInApp,
                         prefer1080p = uiState.recorderPrefer1080p,
                         prefer60Fps = uiState.recorderPrefer60Fps,
+                        recordingAudioSource = uiState.recordingAudioSource,
                         recordAudio = uiState.recorderEnableAudio,
                         isAutoChainTabs = uiState.isAutoChainTabs,
                         autoRevealPreview = uiState.autoRevealPreviewOnFinish,
@@ -621,6 +628,7 @@ fun MoreStudioScreen(
                         onToggleAutoRecordInApp = { viewModel.setAutoRecordInApp(!uiState.isAutoRecordInApp) },
                         onSet1080p = { viewModel.setRecorderPrefer1080p(it) },
                         onSet60Fps = { viewModel.setRecorderPrefer60Fps(it) },
+                        onSelectAudioSource = { viewModel.setRecordingAudioSource(it) },
                         onToggleAudio = { viewModel.setRecorderEnableAudio(!uiState.recorderEnableAudio) },
                         onToggleAutoChain = { viewModel.toggleAutoChainTabs() },
                         onToggleAutoReveal = { viewModel.toggleAutoRevealPreview() },
@@ -2324,6 +2332,7 @@ private fun RecordingFlowSectionContent(
     isAutoRecordInApp: Boolean,
     prefer1080p: Boolean,
     prefer60Fps: Boolean,
+    recordingAudioSource: RecordingAudioSource,
     recordAudio: Boolean,
     isAutoChainTabs: Boolean,
     autoRevealPreview: Boolean,
@@ -2333,6 +2342,7 @@ private fun RecordingFlowSectionContent(
     onToggleAutoRecordInApp: () -> Unit,
     onSet1080p: (Boolean) -> Unit,
     onSet60Fps: (Boolean) -> Unit,
+    onSelectAudioSource: (RecordingAudioSource) -> Unit,
     onToggleAudio: () -> Unit,
     onToggleAutoChain: () -> Unit,
     onToggleAutoReveal: () -> Unit,
@@ -2479,34 +2489,87 @@ private fun RecordingFlowSectionContent(
             }
         }
 
-        // Microphone Audio Toggle
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .clickable { onToggleAudio() }
-                .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Microphone Audio (Voiceover & Keyboard ASMR)",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = "Record ambient mechanical clicks or creator commentary",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Switch(
-                checked = recordAudio,
-                onCheckedChange = { onToggleAudio() },
-                modifier = Modifier.testTag("more_rec_audio_switch")
+        // Audio Recording Source Selection (4 Options)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "Audio Recording Source",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
             )
+            Text(
+                text = "Select audio track input for in-app video screen recordings",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            RecordingAudioSource.entries.forEach { source ->
+                val isSelected = source == recordingAudioSource
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onSelectAudioSource(source) }
+                        .testTag("audio_source_${source.id}"),
+                    color = if (isSelected) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                    },
+                    border = BorderStroke(
+                        width = if (isSelected) 1.5.dp else 0.5.dp,
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                    ),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = when (source) {
+                                        RecordingAudioSource.SYSTEM_ONLY -> Icons.Default.Headphones
+                                        RecordingAudioSource.MIC_ONLY -> Icons.Default.Mic
+                                        RecordingAudioSource.SYSTEM_AND_MIC -> Icons.Default.GraphicEq
+                                        RecordingAudioSource.SILENT -> Icons.Default.VolumeOff
+                                    },
+                                    contentDescription = source.title,
+                                    tint = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = source.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = source.subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        RadioButton(
+                            selected = isSelected,
+                            onClick = { onSelectAudioSource(source) }
+                        )
+                    }
+                }
+            }
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))

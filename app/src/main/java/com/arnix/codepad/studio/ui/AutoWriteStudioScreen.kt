@@ -16,6 +16,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.arnix.codepad.studio.engine.ScreenRecorderEngine
 import com.arnix.codepad.studio.ui.components.InAppRecordingFloatingPill
 import com.arnix.codepad.studio.ui.components.SavedRecordingSuccessDialog
+import com.arnix.codepad.studio.ui.components.RecordingAudioSourceBottomSheet
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -75,6 +76,10 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.GraphicEq
+import com.arnix.codepad.studio.model.RecordingAudioSource
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Visibility
@@ -179,6 +184,7 @@ fun AutoWriteStudioScreen(
 
     var pendingCaptureToken by remember { mutableStateOf<Pair<Int, Intent>?>(null) }
     var isCleanRecordRequested by remember { mutableStateOf(false) }
+    var isAudioSourceSheetVisible by remember { mutableStateOf(false) }
 
     val launchServiceWithToken: (Pair<Int, Intent>) -> Unit = { token ->
         val metrics = context.resources.displayMetrics
@@ -190,6 +196,7 @@ fun AutoWriteStudioScreen(
             height = metrics.heightPixels,
             densityDpi = metrics.densityDpi,
             audioEnabled = uiState.recorderEnableAudio,
+            audioSource = uiState.recordingAudioSource,
             fps60 = uiState.recorderPrefer60Fps,
             is1080p = uiState.recorderPrefer1080p
         )
@@ -240,7 +247,8 @@ fun AutoWriteStudioScreen(
                 permissionsToRequest.add(android.Manifest.permission.POST_NOTIFICATIONS)
             }
         }
-        if (uiState.recorderEnableAudio) {
+        val needsAudio = uiState.recordingAudioSource != RecordingAudioSource.SILENT
+        if (needsAudio) {
             if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 permissionsToRequest.add(android.Manifest.permission.RECORD_AUDIO)
             }
@@ -1091,6 +1099,7 @@ fun AutoWriteStudioScreen(
                     isTurboMode = uiState.isTurboMode,
                     autoDurationTarget = uiState.autoDurationTarget,
                     typingSoundProfile = uiState.typingSoundProfile,
+                    recordingAudioSource = uiState.recordingAudioSource,
                     estimatedSeconds = metrics.estimatedTotalSeconds,
                     isFloatingPreviewOpen = uiState.isFloatingPreviewOpen,
                     onSelectDurationTarget = { viewModel.selectAutoDurationTarget(it) },
@@ -1106,6 +1115,7 @@ fun AutoWriteStudioScreen(
                     onSpeedChange = { viewModel.setSpeedLevel(it) },
                     onToggleTurbo = { viewModel.toggleTurboMode() },
                     onCycleTypingSound = { viewModel.cycleTypingSoundProfile() },
+                    onOpenAudioSourceSheet = { isAudioSourceSheetVisible = true },
                     onToggleFloatingPreview = { viewModel.handleDoubleTapGesture() },
                     isScreenRecording = recorderState.isRecording,
                     onToggleInAppRecord = {
@@ -1128,7 +1138,7 @@ fun AutoWriteStudioScreen(
                 onStopClick = { ScreenRecorderEngine.stopServiceRecording(context) },
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 10.dp, end = 12.dp)
+                    .padding(top = 12.dp, end = 12.dp)
             )
         }
 
@@ -1139,6 +1149,17 @@ fun AutoWriteStudioScreen(
                 onPlay = { uri -> ScreenRecorderEngine.playRecordedVideo(context, uri) },
                 onShare = { uri, name -> ScreenRecorderEngine.shareRecordedVideo(context, uri, name) },
                 onDismiss = { ScreenRecorderEngine.clearLastSavedRecording() }
+            )
+        }
+
+        // Sound Recording Options Bottom Sheet (System Only / Mic Only / Both / Silent)
+        if (isAudioSourceSheetVisible) {
+            RecordingAudioSourceBottomSheet(
+                selectedSource = uiState.recordingAudioSource,
+                onSelectSource = { source ->
+                    viewModel.setRecordingAudioSource(source)
+                },
+                onDismiss = { isAudioSourceSheetVisible = false }
             )
         }
     }
@@ -1531,6 +1552,7 @@ private fun CreatorControlDeck(
     isTurboMode: Boolean,
     autoDurationTarget: AutoDurationTarget,
     typingSoundProfile: TypingSoundProfile,
+    recordingAudioSource: RecordingAudioSource,
     estimatedSeconds: Int,
     isFloatingPreviewOpen: Boolean,
     onSelectDurationTarget: (AutoDurationTarget) -> Unit,
@@ -1541,6 +1563,7 @@ private fun CreatorControlDeck(
     onSpeedChange: (Int) -> Unit,
     onToggleTurbo: () -> Unit,
     onCycleTypingSound: () -> Unit,
+    onOpenAudioSourceSheet: () -> Unit,
     onToggleFloatingPreview: () -> Unit,
     isScreenRecording: Boolean = false,
     onToggleInAppRecord: () -> Unit = {}
@@ -1592,6 +1615,28 @@ private fun CreatorControlDeck(
                     modifier = Modifier
                         .height(30.dp)
                         .testTag("typing_sound_button")
+                )
+
+                // Recording Audio Source Chip (System / Mic / Both / Silent)
+                FilterChip(
+                    selected = recordingAudioSource != RecordingAudioSource.SILENT,
+                    onClick = onOpenAudioSourceSheet,
+                    label = { Text("Sound: ${recordingAudioSource.shortLabel}", style = MaterialTheme.typography.labelSmall) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = when (recordingAudioSource) {
+                                RecordingAudioSource.SYSTEM_ONLY -> Icons.Default.Headphones
+                                RecordingAudioSource.MIC_ONLY -> Icons.Default.Mic
+                                RecordingAudioSource.SYSTEM_AND_MIC -> Icons.Default.GraphicEq
+                                RecordingAudioSource.SILENT -> Icons.Default.VolumeOff
+                            },
+                            contentDescription = "Recording Audio Source: ${recordingAudioSource.title}",
+                            modifier = Modifier.size(15.dp)
+                        )
+                    },
+                    modifier = Modifier
+                        .height(30.dp)
+                        .testTag("recording_audio_source_button")
                 )
 
                 FilterChip(

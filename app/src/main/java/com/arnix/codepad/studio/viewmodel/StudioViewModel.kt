@@ -27,6 +27,7 @@ import com.arnix.codepad.studio.engine.ScreenRecorderEngine
 import com.arnix.codepad.studio.engine.TypingSoundEngine
 import com.arnix.codepad.studio.engine.TypingSoundProfile
 import com.arnix.codepad.studio.engine.WebSandboxEngine
+import com.arnix.codepad.studio.model.RecordingAudioSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -382,7 +383,8 @@ data class StudioUiState(
     val isSavedVideoDialogOpen: Boolean = false,
     val recorderPrefer1080p: Boolean = true,
     val recorderPrefer60Fps: Boolean = true,
-    val recorderEnableAudio: Boolean = false,
+    val recorderEnableAudio: Boolean = true,
+    val recordingAudioSource: RecordingAudioSource = RecordingAudioSource.SYSTEM_ONLY,
     val autoWriteFinishedNonce: Long = 0L
 ) {
     val activeCode: String
@@ -1974,9 +1976,26 @@ class StudioViewModel(
     }
 
     fun setRecorderEnableAudio(enabled: Boolean) {
-        _uiState.update { it.copy(recorderEnableAudio = enabled) }
-        ScreenRecorderEngine.setRecordAudioPref(enabled)
+        val newSource = if (enabled) RecordingAudioSource.SYSTEM_ONLY else RecordingAudioSource.SILENT
+        setRecordingAudioSource(newSource)
+    }
+
+    fun setRecordingAudioSource(source: RecordingAudioSource) {
+        _uiState.update {
+            it.copy(
+                recordingAudioSource = source,
+                recorderEnableAudio = source != RecordingAudioSource.SILENT
+            )
+        }
+        ScreenRecorderEngine.setRecordAudioPref(source != RecordingAudioSource.SILENT)
         triggerDebouncedAutoSave()
+    }
+
+    fun cycleRecordingAudioSource() {
+        val current = _uiState.value.recordingAudioSource
+        val all = RecordingAudioSource.entries
+        val nextIndex = (all.indexOf(current) + 1) % all.size
+        setRecordingAudioSource(all[nextIndex])
     }
 
     fun handleSingleTapGesture() {
