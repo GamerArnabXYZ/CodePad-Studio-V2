@@ -17,7 +17,18 @@ import com.arnix.codepad.studio.engine.ScreenRecorderEngine
 import com.arnix.codepad.studio.ui.components.InAppRecordingFloatingPill
 import com.arnix.codepad.studio.ui.components.SavedRecordingSuccessDialog
 import com.arnix.codepad.studio.ui.components.RecordingAudioSourceBottomSheet
+import com.arnix.codepad.studio.ui.components.CustomAudioBgmSheet
+import com.arnix.codepad.studio.ui.components.RecordingLayoutCustomizerSheet
+import com.arnix.codepad.studio.ui.components.RecordingLayoutDivider
+import com.arnix.codepad.studio.model.BgmConfig
+import com.arnix.codepad.studio.model.RecordingLayoutConfig
+import com.arnix.codepad.studio.model.RecordingLayoutMode
+import com.arnix.codepad.studio.model.RecDividerStyle
+import com.arnix.codepad.studio.model.RecRevealTransition
+import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.CubicBezierEasing
@@ -185,6 +196,8 @@ fun AutoWriteStudioScreen(
     var pendingCaptureToken by remember { mutableStateOf<Pair<Int, Intent>?>(null) }
     var isCleanRecordRequested by remember { mutableStateOf(false) }
     var isAudioSourceSheetVisible by remember { mutableStateOf(false) }
+    var isBgmSheetVisible by remember { mutableStateOf(false) }
+    var isLayoutSheetVisible by remember { mutableStateOf(false) }
 
     val launchServiceWithToken: (Pair<Int, Intent>) -> Unit = { token ->
         val metrics = context.resources.displayMetrics
@@ -447,27 +460,31 @@ fun AutoWriteStudioScreen(
                 }
             }
 
-            // 1. Top Section: Studio Code Window Card (Upper Half of Clean Recording Stage)
-            ElevatedCard(
-                modifier = Modifier
-                    .weight(if (uiState.isFloatingPreviewOpen && uiState.isRecordingMode) 0.52f else 1f)
-                    .fillMaxWidth(),
-                shape = if (uiState.isRecordingMode) RoundedCornerShape(0.dp) else RoundedCornerShape(16.dp),
-                elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (uiState.isRecordingMode) 0.dp else 6.dp),
-                colors = CardDefaults.elevatedCardColors(
-                    containerColor = editorPalette.editorBackground
-                )
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    StudioCodeWindowHeader(
-                        projectName = uiState.projectName,
-                        activeTab = uiState.autoWriteTab,
-                        progress = uiState.autoWriteProgress,
-                        isAutoChain = uiState.isAutoChainTabs,
-                        isRecordingMode = uiState.isRecordingMode,
-                        onSelectTab = { viewModel.selectAutoWriteTab(it) },
-                        onExitRecordingMode = { viewModel.exitRecordingMode() }
+            val layoutConfig = uiState.recordingLayoutConfig
+            val stageCornerRadius = if (uiState.isRecordingMode) RoundedCornerShape(layoutConfig.cornerRadiusDp.dp) else RoundedCornerShape(16.dp)
+
+            // Reusable pane for Code Editor Window
+            val renderEditorPane: @Composable (Modifier) -> Unit = { paneModifier ->
+                ElevatedCard(
+                    modifier = paneModifier.fillMaxWidth(),
+                    shape = stageCornerRadius,
+                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (uiState.isRecordingMode) 0.dp else 6.dp),
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = editorPalette.editorBackground
                     )
+                ) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        StudioCodeWindowHeader(
+                            projectName = uiState.projectName,
+                            activeTab = uiState.autoWriteTab,
+                            progress = uiState.autoWriteProgress,
+                            isAutoChain = uiState.isAutoChainTabs,
+                            isRecordingMode = uiState.isRecordingMode,
+                            layoutMode = layoutConfig.layoutMode,
+                            onOpenLayoutSheet = { isLayoutSheetVisible = true },
+                            onSelectTab = { viewModel.selectAutoWriteTab(it) },
+                            onExitRecordingMode = { viewModel.exitRecordingMode() }
+                        )
 
                     SmoothAutoWriteProgressBar(
                         targetProgress = uiState.autoWriteProgress,
@@ -913,99 +930,154 @@ fun AutoWriteStudioScreen(
                     )
                 }
             }
+        }
 
-            // 2. Dedicated Bottom Live Preview Section (Opens on 2× Tap, Finger-Resizable ↕, Updates Instantly!)
-            AnimatedVisibility(
-                visible = uiState.isFloatingPreviewOpen,
-                enter = expandVertically(
-                    animationSpec = tween(260, easing = RealisticSlideEasing),
-                    expandFrom = Alignment.Top
-                ) + fadeIn(tween(220)),
-                exit = shrinkVertically(
-                    animationSpec = tween(220, easing = RealisticSlideEasing),
-                    shrinkTowards = Alignment.Top
-                ) + fadeOut(tween(160))
-            ) {
-                ElevatedCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .pointerInput(Unit) {
-                            var tapCount = 0
-                            var tapDispatchJob: Job? = null
-                            awaitEachGesture {
-                                val down = awaitFirstDown(requireUnconsumed = false)
-                                val downPos = down.position
-                                val touchSlop = viewConfiguration.touchSlop
-                                var draggedBeyondSlop = false
-                                var upCaptured = false
+        // Reusable pane for Live Web DOM Preview Window
+        val renderPreviewPane: @Composable (Modifier) -> Unit = { paneModifier ->
+            ElevatedCard(
+                modifier = paneModifier
+                    .fillMaxWidth()
+                    .pointerInput(Unit) {
+                        var tapCount = 0
+                        var tapDispatchJob: Job? = null
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val downPos = down.position
+                            val touchSlop = viewConfiguration.touchSlop
+                            var draggedBeyondSlop = false
+                            var upCaptured = false
 
-                                while (true) {
-                                    val event = awaitPointerEvent(PointerEventPass.Final)
-                                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                    if ((change.position - downPos).getDistance() > touchSlop || change.isConsumed) {
-                                        draggedBeyondSlop = true
-                                        break
-                                    }
-                                    if (!change.pressed) {
-                                        upCaptured = true
-                                        break
-                                    }
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Final)
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if ((change.position - downPos).getDistance() > touchSlop || change.isConsumed) {
+                                    draggedBeyondSlop = true
+                                    break
                                 }
+                                if (!change.pressed) {
+                                    upCaptured = true
+                                    break
+                                }
+                            }
 
-                                if (draggedBeyondSlop) {
-                                    tapDispatchJob?.cancel()
-                                    tapCount = 0
-                                } else if (upCaptured) {
-                                    tapCount++
-                                    tapDispatchJob?.cancel()
-                                    val capturedCount = tapCount
-                                    tapDispatchJob = coroutineScope.launch {
-                                        delay(260L)
-                                        when (capturedCount) {
-                                            2 -> viewModel.handleDoubleTapGesture()
-                                            3 -> viewModel.handleTripleTapGesture(context)
-                                        }
-                                        tapCount = 0
+                            if (draggedBeyondSlop) {
+                                tapDispatchJob?.cancel()
+                                tapCount = 0
+                            } else if (upCaptured) {
+                                tapCount++
+                                tapDispatchJob?.cancel()
+                                val capturedCount = tapCount
+                                tapDispatchJob = coroutineScope.launch {
+                                    delay(260L)
+                                    when (capturedCount) {
+                                        2 -> viewModel.handleDoubleTapGesture()
+                                        3 -> viewModel.handleTripleTapGesture(context)
                                     }
+                                    tapCount = 0
                                 }
                             }
                         }
-                        .testTag("floating_live_preview_window")
-                        .then(if (uiState.isRecordingMode) Modifier.weight(0.48f) else Modifier),
-                    shape = if (uiState.isRecordingMode) RoundedCornerShape(0.dp) else RoundedCornerShape(16.dp),
-                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (uiState.isRecordingMode) 0.dp else 6.dp),
-                    colors = CardDefaults.elevatedCardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    )
-                ) {
-                    NativeDomPreviewPanel(
-                        domNodes = uiState.autoWriteDomNodes,
-                        bodyStyle = uiState.autoWriteBodyStyle,
-                        onDomButtonClick = { fn -> viewModel.onNativeDomButtonClicked(fn) },
-                        onRefreshRunJs = { viewModel.forceReloadPreview() },
-                        htmlCode = uiState.autoWriteEffectiveHtml,
-                        cssCode = uiState.autoWriteEffectiveCss,
-                        jsCode = uiState.autoWriteEffectiveJs,
-                        runJs = !uiState.isAutoWritePlaying || uiState.autoWriteEffectiveJs.isNotBlank(),
-                        isProgressiveAutoWrite = uiState.isAutoWritePlaying,
-                        previewScaleMode = uiState.previewScaleMode,
-                        previewReloadNonce = uiState.previewReloadNonce,
-                        onCycleScaleMode = { viewModel.cyclePreviewScaleMode() },
-                        onToggleExpandHeight = { viewModel.togglePreviewExpandedHeight() },
-                        onWebConsoleLog = { level, msg, src, stack ->
-                            viewModel.onWebConsoleMessage(level, msg, src, stack)
-                        },
-                        onWebConsoleClear = { viewModel.onWebConsoleClear() },
-                        onClose = if (uiState.isRecordingMode) null else ({ viewModel.handleDoubleTapGesture() }),
-                        isRecordingMode = uiState.isRecordingMode,
-                        autoScrollPreview = uiState.isAutoWritePlaying,
-                        maxBodyHeight = uiState.previewSectionHeightDp.dp,
-                        onResizeDeltaDp = { deltaDp ->
-                            viewModel.adjustPreviewSectionHeight(deltaDp)
+                    }
+                    .testTag("floating_live_preview_window"),
+                shape = stageCornerRadius,
+                elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (uiState.isRecordingMode) 0.dp else 6.dp),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            ) {
+                NativeDomPreviewPanel(
+                    domNodes = uiState.autoWriteDomNodes,
+                    bodyStyle = uiState.autoWriteBodyStyle,
+                    onDomButtonClick = { fn -> viewModel.onNativeDomButtonClicked(fn) },
+                    onRefreshRunJs = { viewModel.forceReloadPreview() },
+                    htmlCode = uiState.autoWriteEffectiveHtml,
+                    cssCode = uiState.autoWriteEffectiveCss,
+                    jsCode = uiState.autoWriteEffectiveJs,
+                    runJs = !uiState.isAutoWritePlaying || uiState.autoWriteEffectiveJs.isNotBlank(),
+                    isProgressiveAutoWrite = uiState.isAutoWritePlaying,
+                    previewScaleMode = uiState.previewScaleMode,
+                    previewReloadNonce = uiState.previewReloadNonce,
+                    onCycleScaleMode = { viewModel.cyclePreviewScaleMode() },
+                    onToggleExpandHeight = { viewModel.togglePreviewExpandedHeight() },
+                    onWebConsoleLog = { level, msg, src, stack ->
+                        viewModel.onWebConsoleMessage(level, msg, src, stack)
+                    },
+                    onWebConsoleClear = { viewModel.onWebConsoleClear() },
+                    onClose = if (uiState.isRecordingMode) null else ({ viewModel.handleDoubleTapGesture() }),
+                    isRecordingMode = uiState.isRecordingMode,
+                    autoScrollPreview = uiState.isAutoWritePlaying,
+                    maxBodyHeight = if (uiState.isRecordingMode) 4000.dp else uiState.previewSectionHeightDp.dp,
+                    onResizeDeltaDp = { deltaDp ->
+                        viewModel.adjustPreviewSectionHeight(deltaDp)
+                    }
+                )
+            }
+        }
+
+        // 4 Built-In Recording Layouts (Ultra Customizable: Editor Only, Split Top/Bottom, Preview Top, End Fullscreen Reveal)
+        if (uiState.isRecordingMode) {
+            when (layoutConfig.layoutMode) {
+                RecordingLayoutMode.EDITOR_ONLY -> {
+                    renderEditorPane(Modifier.weight(1f))
+                }
+                RecordingLayoutMode.EDITOR_TOP_PREVIEW_BOTTOM -> {
+                    renderEditorPane(Modifier.weight(layoutConfig.editorWeight))
+                    RecordingLayoutDivider(style = layoutConfig.dividerStyle)
+                    renderPreviewPane(Modifier.weight(layoutConfig.previewWeight))
+                }
+                RecordingLayoutMode.PREVIEW_TOP_EDITOR_BOTTOM -> {
+                    renderPreviewPane(Modifier.weight(layoutConfig.previewWeight))
+                    RecordingLayoutDivider(style = layoutConfig.dividerStyle)
+                    renderEditorPane(Modifier.weight(layoutConfig.editorWeight))
+                }
+                RecordingLayoutMode.EDITOR_THEN_FULL_PREVIEW_AT_END -> {
+                    if (uiState.isEndFullscreenPreviewRevealed) {
+                        AnimatedVisibility(
+                            visible = true,
+                            enter = when (layoutConfig.revealTransition) {
+                                RecRevealTransition.SMOOTH_CROSSFADE -> fadeIn(tween(400))
+                                RecRevealTransition.SLIDE_UP -> slideInVertically(tween(420, easing = RealisticSlideEasing)) { it } + fadeIn()
+                                RecRevealTransition.EXPAND_AND_SCALE -> expandVertically(tween(450, easing = RealisticSlideEasing)) + fadeIn(tween(300))
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                        ) {
+                            renderPreviewPane(Modifier.fillMaxSize())
                         }
-                    )
+                    } else {
+                        renderEditorPane(Modifier.weight(1f))
+                    }
                 }
             }
+        } else {
+            // Non-recording mode: respects layout mode if preview top or standard editor top
+            if (layoutConfig.layoutMode == RecordingLayoutMode.PREVIEW_TOP_EDITOR_BOTTOM && uiState.isFloatingPreviewOpen) {
+                AnimatedVisibility(
+                    visible = uiState.isFloatingPreviewOpen,
+                    enter = expandVertically(animationSpec = tween(260, easing = RealisticSlideEasing), expandFrom = Alignment.Top) + fadeIn(tween(220)),
+                    exit = shrinkVertically(animationSpec = tween(220, easing = RealisticSlideEasing), shrinkTowards = Alignment.Top) + fadeOut(tween(160))
+                ) {
+                    renderPreviewPane(Modifier.fillMaxWidth())
+                }
+                if (uiState.isFloatingPreviewOpen) {
+                    RecordingLayoutDivider(style = layoutConfig.dividerStyle)
+                }
+                renderEditorPane(Modifier.weight(1f))
+            } else {
+                renderEditorPane(Modifier.weight(if (uiState.isFloatingPreviewOpen) 0.52f else 1f))
+                if (uiState.isFloatingPreviewOpen) {
+                    RecordingLayoutDivider(style = layoutConfig.dividerStyle)
+                }
+                AnimatedVisibility(
+                    visible = uiState.isFloatingPreviewOpen,
+                    enter = expandVertically(animationSpec = tween(260, easing = RealisticSlideEasing), expandFrom = Alignment.Top) + fadeIn(tween(220)),
+                    exit = shrinkVertically(animationSpec = tween(220, easing = RealisticSlideEasing), shrinkTowards = Alignment.Top) + fadeOut(tween(160))
+                ) {
+                    renderPreviewPane(Modifier.fillMaxWidth())
+                }
+            }
+        }
 
             // Optional Viral Hook Banner at Bottom Stage (Below Code Window) - hidden in clean recording mode
             if (!uiState.isRecordingMode &&
@@ -1102,6 +1174,8 @@ fun AutoWriteStudioScreen(
                     recordingAudioSource = uiState.recordingAudioSource,
                     estimatedSeconds = metrics.estimatedTotalSeconds,
                     isFloatingPreviewOpen = uiState.isFloatingPreviewOpen,
+                    recordingLayoutConfig = uiState.recordingLayoutConfig,
+                    onOpenLayoutSheet = { isLayoutSheetVisible = true },
                     onSelectDurationTarget = { viewModel.selectAutoDurationTarget(it) },
                     onTogglePlayPause = { viewModel.handleSingleTapGesture() },
                     onStartCleanRecord = {
@@ -1116,6 +1190,8 @@ fun AutoWriteStudioScreen(
                     onToggleTurbo = { viewModel.toggleTurboMode() },
                     onCycleTypingSound = { viewModel.cycleTypingSoundProfile() },
                     onOpenAudioSourceSheet = { isAudioSourceSheetVisible = true },
+                    bgmConfig = uiState.bgmConfig,
+                    onOpenBgmSheet = { isBgmSheetVisible = true },
                     onToggleFloatingPreview = { viewModel.handleDoubleTapGesture() },
                     isScreenRecording = recorderState.isRecording,
                     onToggleInAppRecord = {
@@ -1159,7 +1235,37 @@ fun AutoWriteStudioScreen(
                 onSelectSource = { source ->
                     viewModel.setRecordingAudioSource(source)
                 },
-                onDismiss = { isAudioSourceSheetVisible = false }
+                onDismiss = { isAudioSourceSheetVisible = false },
+                onOpenCustomBgm = { isBgmSheetVisible = true }
+            )
+        }
+
+        // Custom Background Music & Audio Timing Customization Sheet (15s, 20s, 30s, etc.)
+        if (isBgmSheetVisible) {
+            CustomAudioBgmSheet(
+                bgmConfig = uiState.bgmConfig,
+                activeDurationTarget = uiState.autoDurationTarget,
+                onUpdateConfig = { updated ->
+                    viewModel.updateBgmConfig(updated)
+                },
+                onImportAudio = { uri, name ->
+                    viewModel.importCustomBgmFile(context, uri, name)
+                },
+                onDismiss = { isBgmSheetVisible = false }
+            )
+        }
+
+        // Recording Screen Layouts Sheet (Editor Only, Split Top/Bottom, Preview Top, End Fullscreen Reveal)
+        if (isLayoutSheetVisible || uiState.isRecordingLayoutSheetOpen) {
+            RecordingLayoutCustomizerSheet(
+                config = uiState.recordingLayoutConfig,
+                onUpdateConfig = { updated ->
+                    viewModel.updateRecordingLayoutConfig(updated)
+                },
+                onDismiss = {
+                    isLayoutSheetVisible = false
+                    viewModel.setRecordingLayoutSheetOpen(false)
+                }
             )
         }
     }
@@ -1313,6 +1419,8 @@ private fun StudioCodeWindowHeader(
     progress: Float,
     isAutoChain: Boolean,
     isRecordingMode: Boolean,
+    layoutMode: RecordingLayoutMode? = null,
+    onOpenLayoutSheet: (() -> Unit)? = null,
     onSelectTab: (CodeTab) -> Unit,
     onExitRecordingMode: () -> Unit
 ) {
@@ -1364,19 +1472,53 @@ private fun StudioCodeWindowHeader(
             }
 
             if (isRecordingMode) {
-                Surface(
-                    onClick = onExitRecordingMode,
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Exit Recording Mode",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .padding(4.dp)
-                            .size(12.dp)
-                    )
+                    if (layoutMode != null && onOpenLayoutSheet != null) {
+                        Surface(
+                            onClick = onOpenLayoutSheet,
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                            modifier = Modifier.testTag("rec_header_layout_pill")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Dashboard,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Text(
+                                    text = layoutMode.shortLabel,
+                                    fontSize = 10.sp,
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+
+                    Surface(
+                        onClick = onExitRecordingMode,
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Exit Recording Mode",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .padding(4.dp)
+                                .size(12.dp)
+                        )
+                    }
                 }
             }
         }
@@ -1555,6 +1697,8 @@ private fun CreatorControlDeck(
     recordingAudioSource: RecordingAudioSource,
     estimatedSeconds: Int,
     isFloatingPreviewOpen: Boolean,
+    recordingLayoutConfig: RecordingLayoutConfig? = null,
+    onOpenLayoutSheet: (() -> Unit)? = null,
     onSelectDurationTarget: (AutoDurationTarget) -> Unit,
     onTogglePlayPause: () -> Unit,
     onStartCleanRecord: () -> Unit,
@@ -1564,6 +1708,8 @@ private fun CreatorControlDeck(
     onToggleTurbo: () -> Unit,
     onCycleTypingSound: () -> Unit,
     onOpenAudioSourceSheet: () -> Unit,
+    bgmConfig: BgmConfig,
+    onOpenBgmSheet: () -> Unit,
     onToggleFloatingPreview: () -> Unit,
     isScreenRecording: Boolean = false,
     onToggleInAppRecord: () -> Unit = {}
@@ -1639,6 +1785,32 @@ private fun CreatorControlDeck(
                         .testTag("recording_audio_source_button")
                 )
 
+                // Custom Background Music & Timing Customization Chip
+                FilterChip(
+                    selected = bgmConfig.isEnabled,
+                    onClick = onOpenBgmSheet,
+                    label = {
+                        val text = if (bgmConfig.isEnabled) {
+                            val duration = bgmConfig.getEffectiveDuration(autoDurationTarget)
+                            "BGM: ${bgmConfig.trackTitle.take(8)} (${duration}s)"
+                        } else {
+                            "BGM: Off"
+                        }
+                        Text(text, style = MaterialTheme.typography.labelSmall)
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Audiotrack,
+                            contentDescription = "Background Music",
+                            tint = if (bgmConfig.isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    },
+                    modifier = Modifier
+                        .height(30.dp)
+                        .testTag("bgm_config_chip_button")
+                )
+
                 FilterChip(
                     selected = isTurboMode,
                     onClick = onToggleTurbo,
@@ -1654,6 +1826,25 @@ private fun CreatorControlDeck(
                         .height(30.dp)
                         .testTag("autowrite_turbo_button")
                 )
+
+                if (recordingLayoutConfig != null && onOpenLayoutSheet != null) {
+                    FilterChip(
+                        selected = false,
+                        onClick = onOpenLayoutSheet,
+                        label = { Text("Layout: ${recordingLayoutConfig.layoutMode.shortLabel}", style = MaterialTheme.typography.labelSmall) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Dashboard,
+                                contentDescription = "Recording Screen Layout",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        },
+                        modifier = Modifier
+                            .height(30.dp)
+                            .testTag("autowrite_rec_layout_button")
+                    )
+                }
             }
 
             // Quick Duration Selector Row (15s, 20s, 30s, 45s, 1m, Manual)

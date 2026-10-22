@@ -75,11 +75,6 @@ fun CodePadStudioAppRoot() {
     val context = LocalContext.current
     var isSplashVisible by remember { mutableStateOf(true) }
 
-    LaunchedEffect(Unit) {
-        runCatching {
-            TypingSoundEngine.initialize(context)
-        }
-    }
     val repository = remember {
         val db = CodePadDatabase.getInstance(context)
         CodeProjectRepository(db.codeProjectDao())
@@ -87,6 +82,13 @@ fun CodePadStudioAppRoot() {
     val studioViewModel: StudioViewModel = viewModel(
         factory = StudioViewModel.provideFactory(repository)
     )
+
+    LaunchedEffect(Unit) {
+        runCatching {
+            TypingSoundEngine.initialize(context)
+            studioViewModel.setAppContext(context)
+        }
+    }
     val uiState by studioViewModel.uiState.collectAsStateWithLifecycle()
 
     BackHandler(enabled = isSplashVisible || uiState.isOnboardingOpen || uiState.isRecordingMode || uiState.activeModule != StudioModule.CODEPAD_IDE) {

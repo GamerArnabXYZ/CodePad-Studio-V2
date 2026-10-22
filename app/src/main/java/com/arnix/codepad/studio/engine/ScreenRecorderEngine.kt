@@ -698,6 +698,9 @@ class ScreenRecordingService : Service() {
             Log.w(TAG, "internalAudioEngine stop error", e)
         }
         internalAudioEngine = null
+        try {
+            BackgroundMusicEngine.stopPlayback()
+        } catch (_: Exception) {}
         TypingSoundEngine.isMutedForRecording = false
 
         var file = currentOutputFile

@@ -22,12 +22,16 @@ import com.arnix.codepad.studio.engine.LogLevel
 import com.arnix.codepad.studio.engine.NativeDomNode
 import com.arnix.codepad.studio.engine.NativeLiveEngine
 import com.arnix.codepad.studio.engine.PreviewScaleMode
+import com.arnix.codepad.studio.engine.BackgroundMusicEngine
 import com.arnix.codepad.studio.engine.ProjectExportEngine
 import com.arnix.codepad.studio.engine.ScreenRecorderEngine
 import com.arnix.codepad.studio.engine.TypingSoundEngine
 import com.arnix.codepad.studio.engine.TypingSoundProfile
 import com.arnix.codepad.studio.engine.WebSandboxEngine
+import com.arnix.codepad.studio.model.BgmConfig
 import com.arnix.codepad.studio.model.RecordingAudioSource
+import com.arnix.codepad.studio.model.RecordingLayoutConfig
+import com.arnix.codepad.studio.model.RecordingLayoutMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -385,6 +389,10 @@ data class StudioUiState(
     val recorderPrefer60Fps: Boolean = true,
     val recorderEnableAudio: Boolean = true,
     val recordingAudioSource: RecordingAudioSource = RecordingAudioSource.SYSTEM_ONLY,
+    val bgmConfig: BgmConfig = BgmConfig(),
+    val recordingLayoutConfig: RecordingLayoutConfig = RecordingLayoutConfig(),
+    val isRecordingLayoutSheetOpen: Boolean = false,
+    val isEndFullscreenPreviewRevealed: Boolean = false,
     val autoWriteFinishedNonce: Long = 0L
 ) {
     val activeCode: String
@@ -474,6 +482,11 @@ class StudioViewModel(
     private var typewriterJob: Job? = null
     private var countdownJob: Job? = null
     var onAutoWriteFinished: (() -> Unit)? = null
+    private var appContext: Context? = null
+
+    fun setAppContext(context: Context) {
+        appContext = context.applicationContext
+    }
     private var isWebViewEngineAttached: Boolean = false
     private var lastAutoPreviewHtml: String = "__UNSET__"
     private var lastAutoPreviewCss: String = "__UNSET__"
@@ -1877,7 +1890,12 @@ class StudioViewModel(
                 isViralTemplatesSheetOpen = false,
                 isAutoWritePlaying = false,
                 isEndCtaActive = false,
-                isFloatingPreviewOpen = true, // Ensure both Code Editor AND Preview are visible in rec mode!
+                isFloatingPreviewOpen = when (it.recordingLayoutConfig.layoutMode) {
+                    RecordingLayoutMode.EDITOR_ONLY -> false
+                    RecordingLayoutMode.EDITOR_THEN_FULL_PREVIEW_AT_END -> false
+                    else -> true
+                },
+                isEndFullscreenPreviewRevealed = false,
                 recordingCountdownSeconds = if (useCountdown) 3 else 0,
                 isRecordingStartingDelay = false,
                 typedCharCount = 0,
@@ -1998,6 +2016,60 @@ class StudioViewModel(
         setRecordingAudioSource(all[nextIndex])
     }
 
+    fun updateBgmConfig(config: BgmConfig) {
+        _uiState.update { it.copy(bgmConfig = config) }
+    }
+
+    fun toggleBgm(enabled: Boolean, context: Context? = null) {
+        val updated = _uiState.value.bgmConfig.copy(isEnabled = enabled)
+        _uiState.update { it.copy(bgmConfig = updated) }
+        if (!enabled) {
+            BackgroundMusicEngine.stopPlayback()
+        } else if (_uiState.value.isAutoWritePlaying && context != null) {
+            BackgroundMusicEngine.startPlayback(context, updated, _uiState.value.autoDurationTarget)
+        }
+    }
+
+    fun importCustomBgmFile(context: Context, uri: Uri, fileName: String) {
+        val imported = BackgroundMusicEngine.importAudioFromUri(context, uri)
+        if (imported != null) {
+            val (path, durationSec) = imported
+            val updated = _uiState.value.bgmConfig.copy(
+                selectedTrackId = "custom_file",
+                trackTitle = fileName.ifBlank { "Custom Audio Track" },
+                customAudioPath = path,
+                customAudioFileName = fileName,
+                customAudioDurationSeconds = durationSec,
+                startOffsetSeconds = 0,
+                isEnabled = true
+            )
+            _uiState.update { it.copy(bgmConfig = updated) }
+        }
+    }
+
+    fun setRecordingLayoutMode(mode: RecordingLayoutMode) {
+        val updated = _uiState.value.recordingLayoutConfig.copy(layoutMode = mode)
+        _uiState.update { it.copy(recordingLayoutConfig = updated) }
+    }
+
+    fun updateRecordingLayoutConfig(config: RecordingLayoutConfig) {
+        _uiState.update { it.copy(recordingLayoutConfig = config) }
+    }
+
+    fun setRecordingLayoutSheetOpen(open: Boolean) {
+        _uiState.update { it.copy(isRecordingLayoutSheetOpen = open) }
+    }
+
+    fun setRecordingSplitRatio(editorWeight: Float) {
+        val clamped = editorWeight.coerceIn(0.20f, 0.80f)
+        val updated = _uiState.value.recordingLayoutConfig.copy(editorWeight = clamped)
+        _uiState.update { it.copy(recordingLayoutConfig = updated) }
+    }
+
+    fun setEndFullscreenPreviewRevealed(revealed: Boolean) {
+        _uiState.update { it.copy(isEndFullscreenPreviewRevealed = revealed) }
+    }
+
     fun handleSingleTapGesture() {
         val state = _uiState.value
         if (state.isAutoWritePlaying) {
@@ -2045,11 +2117,13 @@ class StudioViewModel(
 
     fun exitRecordingMode(context: Context? = null) {
         countdownJob?.cancel()
+        BackgroundMusicEngine.stopPlayback()
         _uiState.update {
             it.copy(
                 isRecordingMode = false,
                 recordingCountdownSeconds = 0,
-                isRecordingStartingDelay = false
+                isRecordingStartingDelay = false,
+                isEndFullscreenPreviewRevealed = false
             )
         }
         if (context != null && ScreenRecorderEngine.state.value.isRecording) {
@@ -2066,7 +2140,8 @@ class StudioViewModel(
                 autoWriteCurrentLine = 1,
                 autoWriteCurrentColumn = 1,
                 isAutoWritePlaying = false,
-                isEndCtaActive = false
+                isEndCtaActive = false,
+                isEndFullscreenPreviewRevealed = false
             )
         }
         updateProgressiveAutoWritePreview(force = true)
@@ -2093,9 +2168,13 @@ class StudioViewModel(
         }
     }
 
-    fun startOrResumeAutoWrite() {
+    fun startOrResumeAutoWrite(context: Context? = null) {
         typewriterJob?.cancel()
         TypingSoundEngine.resetCadence()
+        val ctx = context ?: appContext
+        if (ctx != null && _uiState.value.bgmConfig.isEnabled) {
+            BackgroundMusicEngine.startPlayback(ctx, _uiState.value.bgmConfig, _uiState.value.autoDurationTarget)
+        }
         syncAutoSpeedMetricsIfNeeded()
         _uiState.update { state ->
             val (line, col) = computeLineAndColumn(state.autoWriteFullCode, state.typedCharCount)
@@ -2165,13 +2244,22 @@ class StudioViewModel(
                     } else {
                         updateProgressiveAutoWritePreview(force = true)
                         TypingSoundEngine.stopAll()
+                        BackgroundMusicEngine.stopPlayback()
+                        val isRevealMode = _uiState.value.recordingLayoutConfig.layoutMode == RecordingLayoutMode.EDITOR_THEN_FULL_PREVIEW_AT_END
                         _uiState.update {
                             it.copy(
                                 isAutoWritePlaying = false,
-                                isFloatingPreviewOpen = if (it.autoRevealPreviewOnFinish) true else it.isFloatingPreviewOpen,
+                                isFloatingPreviewOpen = if (it.autoRevealPreviewOnFinish || isRevealMode) true else it.isFloatingPreviewOpen,
                                 isEndCtaActive = it.showEndCtaAnimation,
                                 autoWriteFinishedNonce = System.currentTimeMillis()
                             )
+                        }
+                        if (isRevealMode) {
+                            val delayMs = _uiState.value.recordingLayoutConfig.revealDelayMs
+                            viewModelScope.launch {
+                                delay(delayMs)
+                                _uiState.update { it.copy(isEndFullscreenPreviewRevealed = true) }
+                            }
                         }
                         onAutoWriteFinished?.invoke()
                         break
@@ -2335,6 +2423,7 @@ class StudioViewModel(
     fun pauseAutoWrite() {
         typewriterJob?.cancel()
         TypingSoundEngine.stopAll()
+        BackgroundMusicEngine.stopPlayback()
         _uiState.update { it.copy(isAutoWritePlaying = false) }
     }
 

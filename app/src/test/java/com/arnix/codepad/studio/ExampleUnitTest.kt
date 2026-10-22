@@ -146,4 +146,35 @@ class ExampleUnitTest {
         )
         assertTrue(nearEndState.copy(ctaDisplayTiming = CtaDisplayTiming.LAST_20_PERCENT).shouldDisplayCtaOverlay)
     }
+
+    @Test
+    fun recordingLayoutModesAndPresets_behaveCorrectly() {
+        // 1. All 4 built-in recording layout modes requested by user
+        assertEquals(4, com.arnix.codepad.studio.model.RecordingLayoutMode.entries.size)
+        val modes = com.arnix.codepad.studio.model.RecordingLayoutMode.entries.map { it.id }
+        assertTrue(modes.contains("editor_only"))
+        assertTrue(modes.contains("editor_top_preview_bottom"))
+        assertTrue(modes.contains("preview_top_editor_bottom"))
+        assertTrue(modes.contains("editor_then_full_preview_at_end"))
+
+        // 2. Ultra-customizable split ratio presets sum to 100%
+        com.arnix.codepad.studio.model.SplitRatioPreset.entries.forEach { preset ->
+            assertEquals(1.0f, preset.editorWeight + preset.previewWeight, 0.01f)
+        }
+
+        // 3. Default RecordingLayoutConfig behaves gracefully
+        val defaultConfig = com.arnix.codepad.studio.model.RecordingLayoutConfig()
+        assertEquals(com.arnix.codepad.studio.model.RecordingLayoutMode.EDITOR_TOP_PREVIEW_BOTTOM, defaultConfig.layoutMode)
+        assertEquals(0.52f, defaultConfig.editorWeight, 0.01f)
+        assertEquals(0.48f, defaultConfig.previewWeight, 0.01f)
+
+        // 4. Custom split ratio clamps preview weight appropriately
+        val customConfig = defaultConfig.copy(editorWeight = 0.75f)
+        assertEquals(0.25f, customConfig.previewWeight, 0.01f)
+
+        // 5. Divider styles and reveal transitions
+        assertEquals(4, com.arnix.codepad.studio.model.RecDividerStyle.entries.size)
+        assertEquals(3, com.arnix.codepad.studio.model.RecRevealTransition.entries.size)
+    }
 }
+

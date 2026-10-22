@@ -110,6 +110,15 @@ import com.arnix.codepad.studio.ui.components.ExportResultDialog
 import com.arnix.codepad.studio.ui.components.RenameProjectDialog
 import com.arnix.codepad.studio.ui.components.RevisionHistorySheet
 import com.arnix.codepad.studio.ui.components.ViralHookHeaderBanner
+import com.arnix.codepad.studio.ui.components.CustomAudioBgmSheet
+import com.arnix.codepad.studio.model.BgmConfig
+import com.arnix.codepad.studio.model.RecordingLayoutConfig
+import com.arnix.codepad.studio.model.RecordingLayoutMode
+import com.arnix.codepad.studio.ui.components.RecordingLayoutCustomizerSheet
+import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Tune
 import com.arnix.codepad.studio.ui.theme.JetBrainsMonoFontFamily
 import com.arnix.codepad.studio.ui.theme.uiSp
 import com.arnix.codepad.studio.viewmodel.AutoDurationTarget
@@ -144,6 +153,8 @@ fun MoreStudioScreen(
     val context = LocalContext.current
     var selectedCategoryIndex by remember { mutableIntStateOf(0) }
     var pendingSafFormat by remember { mutableStateOf(ExportFormat.BUNDLED_HTML) }
+    var isBgmSheetVisible by remember { mutableStateOf(false) }
+    var isLayoutSheetVisible by remember { mutableStateOf(false) }
 
     BackHandler(enabled = selectedCategoryIndex != 0) {
         selectedCategoryIndex = 0
@@ -169,7 +180,7 @@ fun MoreStudioScreen(
         "Editor Font",
         "Project & Export",
         "Starter Templates",
-        "Typing Sounds",
+        "Typing & Custom Music",
         "Speed & Duration",
         "Watermark",
         "Viral Hook",
@@ -423,6 +434,8 @@ fun MoreStudioScreen(
                         pitchVariation = uiState.typingSoundPitchVar,
                         pitchMultiplier = uiState.typingSoundPitchMultiplier,
                         stabilizerResonance = uiState.typingSoundStabilizerResonance,
+                        bgmConfig = uiState.bgmConfig,
+                        onOpenBgmSheet = { isBgmSheetVisible = true },
                         onSelectProfile = { profile ->
                             viewModel.selectTypingSoundProfile(profile)
                         },
@@ -613,6 +626,9 @@ fun MoreStudioScreen(
                     icon = Icons.Filled.Timer
                 ) {
                     RecordingFlowSectionContent(
+                        recordingLayoutConfig = uiState.recordingLayoutConfig,
+                        onOpenLayoutSheet = { isLayoutSheetVisible = true },
+                        onSelectLayoutMode = { viewModel.setRecordingLayoutMode(it) },
                         useCountdown = uiState.useRecordingCountdown,
                         startDelayMs = uiState.recordingStartDelayMs,
                         isAutoRecordInApp = uiState.isAutoRecordInApp,
@@ -623,6 +639,8 @@ fun MoreStudioScreen(
                         isAutoChainTabs = uiState.isAutoChainTabs,
                         autoRevealPreview = uiState.autoRevealPreviewOnFinish,
                         keepPreviewInRecord = uiState.keepPreviewOpenInRecord,
+                        bgmConfig = uiState.bgmConfig,
+                        onOpenBgmSheet = { isBgmSheetVisible = true },
                         onToggleCountdown = { viewModel.toggleUseRecordingCountdown() },
                         onSelectStartDelayMs = { viewModel.setRecordingStartDelayMs(it) },
                         onToggleAutoRecordInApp = { viewModel.setAutoRecordInApp(!uiState.isAutoRecordInApp) },
@@ -714,6 +732,30 @@ fun MoreStudioScreen(
             onDeleteSnapshot = { id -> viewModel.deleteRevisionSnapshot(id) },
             onClearAllSnapshots = { viewModel.clearAllRevisionSnapshots() },
             onDismiss = { viewModel.setRevisionSheetOpen(false) }
+        )
+    }
+
+    if (isBgmSheetVisible) {
+        CustomAudioBgmSheet(
+            bgmConfig = uiState.bgmConfig,
+            activeDurationTarget = uiState.autoDurationTarget,
+            onUpdateConfig = { updated ->
+                viewModel.updateBgmConfig(updated)
+            },
+            onImportAudio = { uri, name ->
+                viewModel.importCustomBgmFile(context, uri, name)
+            },
+            onDismiss = { isBgmSheetVisible = false }
+        )
+    }
+
+    if (isLayoutSheetVisible) {
+        RecordingLayoutCustomizerSheet(
+            config = uiState.recordingLayoutConfig,
+            onUpdateConfig = { updated ->
+                viewModel.updateRecordingLayoutConfig(updated)
+            },
+            onDismiss = { isLayoutSheetVisible = false }
         )
     }
 }
@@ -1133,6 +1175,8 @@ private fun TypingSoundSectionContent(
     pitchVariation: Boolean,
     pitchMultiplier: Float = 1.0f,
     stabilizerResonance: Boolean = true,
+    bgmConfig: BgmConfig? = null,
+    onOpenBgmSheet: (() -> Unit)? = null,
     onSelectProfile: (TypingSoundProfile) -> Unit,
     onVolumeChange: (Float) -> Unit,
     onMinGapChange: (Long) -> Unit,
@@ -1324,6 +1368,101 @@ private fun TypingSoundSectionContent(
                 onCheckedChange = { onTogglePitchVariation() },
                 modifier = Modifier.testTag("typing_sound_pitch_switch")
             )
+        }
+
+        if (bgmConfig != null && onOpenBgmSheet != null) {
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                thickness = 0.5.dp
+            )
+
+            // Custom Background Music & Timing Customization Card
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onOpenBgmSheet() }
+                    .testTag("more_open_custom_bgm_card"),
+                color = if (bgmConfig.isEnabled) {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                },
+                border = BorderStroke(
+                    width = if (bgmConfig.isEnabled) 1.dp else 0.5.dp,
+                    color = if (bgmConfig.isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (bgmConfig.isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Audiotrack,
+                                contentDescription = null,
+                                tint = if (bgmConfig.isEnabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "Background Music & Sound",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = if (bgmConfig.isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                            ) {
+                                Text(
+                                    text = if (bgmConfig.isEnabled) "ACTIVE" else "OFF",
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (bgmConfig.isEnabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = if (bgmConfig.isEnabled) {
+                                "${bgmConfig.trackTitle} • ${bgmConfig.clipDurationSeconds}s timing cut (${(bgmConfig.volume * 100).toInt()}% vol)"
+                            } else {
+                                "Add custom long music & customize timing for 15s, 20s, 30s reels"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = onOpenBgmSheet,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text(if (bgmConfig.isEnabled) "Customize" else "Add Music", fontSize = 11.sp)
+                    }
+                }
+            }
         }
     }
 }
@@ -2327,6 +2466,9 @@ private fun AutoWriteCodeWindowSectionContent(
 
 @Composable
 private fun RecordingFlowSectionContent(
+    recordingLayoutConfig: RecordingLayoutConfig? = null,
+    onOpenLayoutSheet: (() -> Unit)? = null,
+    onSelectLayoutMode: ((RecordingLayoutMode) -> Unit)? = null,
     useCountdown: Boolean,
     startDelayMs: Long,
     isAutoRecordInApp: Boolean,
@@ -2337,6 +2479,8 @@ private fun RecordingFlowSectionContent(
     isAutoChainTabs: Boolean,
     autoRevealPreview: Boolean,
     keepPreviewInRecord: Boolean,
+    bgmConfig: BgmConfig? = null,
+    onOpenBgmSheet: (() -> Unit)? = null,
     onToggleCountdown: () -> Unit,
     onSelectStartDelayMs: (Long) -> Unit,
     onToggleAutoRecordInApp: () -> Unit,
@@ -2349,6 +2493,151 @@ private fun RecordingFlowSectionContent(
     onToggleKeepPreviewInRecord: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (recordingLayoutConfig != null && onOpenLayoutSheet != null) {
+            OutlinedCard(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.outlinedCardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.22f)
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Dashboard,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "Screen Recording Layout",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = recordingLayoutConfig.layoutMode.title,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = onOpenLayoutSheet,
+                            shape = RoundedCornerShape(50),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("more_open_layout_customizer_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Tune,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Customize", fontSize = 12.sp)
+                        }
+                    }
+
+                    Text(
+                        text = recordingLayoutConfig.layoutMode.subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // Quick Mode Switcher Chips
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        RecordingLayoutMode.entries.forEach { mode ->
+                            val isSelected = mode == recordingLayoutConfig.layoutMode
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { onSelectLayoutMode?.invoke(mode) },
+                                label = { Text(mode.shortLabel, fontSize = 11.sp) },
+                                leadingIcon = if (isSelected) {
+                                    {
+                                        Icon(
+                                            imageVector = Icons.Default.Dashboard,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                    }
+                                } else null,
+                                modifier = Modifier.testTag("more_layout_chip_${mode.id}")
+                            )
+                        }
+                    }
+
+                    // Details pill bar: split ratio + divider style + corner radius
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                        ) {
+                            Text(
+                                text = "Split: ${(recordingLayoutConfig.editorWeight * 100).roundToInt()}% Code / ${(recordingLayoutConfig.previewWeight * 100).roundToInt()}% Preview",
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontSize = 9.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                        ) {
+                            Text(
+                                text = "Divider: ${recordingLayoutConfig.dividerStyle.label}",
+                                fontSize = 9.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                        ) {
+                            Text(
+                                text = if (recordingLayoutConfig.cornerRadiusDp == 0) "Corner: Seamless 0dp" else "Corner: ${recordingLayoutConfig.cornerRadiusDp}dp",
+                                fontSize = 9.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -2566,6 +2855,57 @@ private fun RecordingFlowSectionContent(
                         RadioButton(
                             selected = isSelected,
                             onClick = { onSelectAudioSource(source) }
+                        )
+                    }
+                }
+            }
+
+            if (onOpenBgmSheet != null) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onOpenBgmSheet() }
+                        .testTag("more_rec_flow_bgm_button"),
+                    color = if (bgmConfig?.isEnabled == true) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Audiotrack,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Background Music & Clip Timing",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (bgmConfig?.isEnabled == true) {
+                                    "${bgmConfig.trackTitle} (${bgmConfig.clipDurationSeconds}s clip window)"
+                                } else {
+                                    "Configure soundtrack & timing (15s, 20s, 30s reels)"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
