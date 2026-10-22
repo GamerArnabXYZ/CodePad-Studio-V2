@@ -104,7 +104,38 @@ data class RecordingLayoutConfig(
     val revealDelayMs: Long = 600L, // Delay after code ends before preview expands
     val revealHoldSeconds: Int = 3, // How long preview holds in full screen
     val showSplitHandleBar: Boolean = true,
-    val autoScrollToCaret: Boolean = true
+    val autoScrollToCaret: Boolean = true,
+    val previewShowcaseSeconds: Int = 0, // 0 = Auto-Balanced with Target Duration (e.g. 4.2s for 15s, 8s for 30s), or 2..15s fixed
+    val showPreviewShowcaseBadge: Boolean = true // Visual badge showing remaining preview showcase time
 ) {
     val previewWeight: Float get() = (1.0f - editorWeight).coerceIn(0.15f, 0.85f)
+
+    /**
+     * Calculates the exact post-typing preview showcase duration in milliseconds.
+     * When previewShowcaseSeconds == 0 (Auto-Balanced), it allocates an ideal window
+     * of the selected target duration (or 4.0s for manual) so code typing completes early
+     * and viewers enjoy the interactive output.
+     */
+    fun getEffectiveShowcaseDurationMs(target: com.arnix.codepad.studio.viewmodel.AutoDurationTarget): Long {
+        if (previewShowcaseSeconds > 0) {
+            return previewShowcaseSeconds * 1000L
+        }
+        return when (target) {
+            com.arnix.codepad.studio.viewmodel.AutoDurationTarget.SEC_15 -> 4200L
+            com.arnix.codepad.studio.viewmodel.AutoDurationTarget.SEC_20 -> 5500L
+            com.arnix.codepad.studio.viewmodel.AutoDurationTarget.SEC_30 -> 8000L
+            com.arnix.codepad.studio.viewmodel.AutoDurationTarget.SEC_45 -> 12000L
+            com.arnix.codepad.studio.viewmodel.AutoDurationTarget.SEC_60 -> 15000L
+            com.arnix.codepad.studio.viewmodel.AutoDurationTarget.MANUAL -> 4000L
+        }
+    }
+
+    fun getShowcaseLabel(target: com.arnix.codepad.studio.viewmodel.AutoDurationTarget): String {
+        return if (previewShowcaseSeconds == 0) {
+            "Auto (${(getEffectiveShowcaseDurationMs(target) / 1000f).toInt()}s for ${target.shortLabel})"
+        } else {
+            "${previewShowcaseSeconds}s Fixed"
+        }
+    }
 }
+

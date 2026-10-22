@@ -175,6 +175,35 @@ class ExampleUnitTest {
         // 5. Divider styles and reveal transitions
         assertEquals(4, com.arnix.codepad.studio.model.RecDividerStyle.entries.size)
         assertEquals(3, com.arnix.codepad.studio.model.RecRevealTransition.entries.size)
+
+        // 6. Post-typing preview showcase duration auto-balance & fixed overrides
+        assertEquals(4200L, defaultConfig.getEffectiveShowcaseDurationMs(AutoDurationTarget.SEC_15))
+        assertEquals(8000L, defaultConfig.getEffectiveShowcaseDurationMs(AutoDurationTarget.SEC_30))
+        assertEquals(15000L, defaultConfig.getEffectiveShowcaseDurationMs(AutoDurationTarget.SEC_60))
+
+        val fixedShowcaseConfig = defaultConfig.copy(previewShowcaseSeconds = 6)
+        assertEquals(6000L, fixedShowcaseConfig.getEffectiveShowcaseDurationMs(AutoDurationTarget.SEC_15))
+        assertEquals(6000L, fixedShowcaseConfig.getEffectiveShowcaseDurationMs(AutoDurationTarget.SEC_30))
+
+        // 7. AutoSpeedOptimizer fits typing AND preview showcase within target duration
+        val saasPreset = ProjectTemplates.PRESETS.first()
+        val metricsWithShowcase = AutoSpeedOptimizer.analyze(
+            htmlCode = saasPreset.html,
+            cssCode = saasPreset.css,
+            jsCode = saasPreset.js,
+            activeTab = CodeTab.INDEX_HTML,
+            isAutoChain = true,
+            showEndCta = true,
+            target = AutoDurationTarget.SEC_30,
+            manualSpeedLevel = 14,
+            manualTurbo = false,
+            hasPreviewShowcase = true,
+            showcaseDurationMs = 8000L
+        )
+        assertTrue(
+            "Estimated seconds with showcase (${metricsWithShowcase.estimatedTotalSeconds}) must be <= 30s",
+            metricsWithShowcase.estimatedTotalSeconds <= 30
+        )
     }
 }
 

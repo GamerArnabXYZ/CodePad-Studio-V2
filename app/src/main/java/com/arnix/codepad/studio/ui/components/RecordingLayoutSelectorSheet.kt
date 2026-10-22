@@ -486,6 +486,104 @@ fun RecordingLayoutCustomizerSheet(
                         }
                     }
                 }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+
+                // Post-Typing Preview Showcase Duration (Auto-Balanced vs Fixed Presets)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Post-Typing Preview Showcase",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "How long viewers watch the live output after writing finishes (fits within selected target time)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                        ) {
+                            Text(
+                                text = if (config.previewShowcaseSeconds == 0) "Auto-Balanced" else "${config.previewShowcaseSeconds}s Fixed",
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    // Showcase Presets Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            0 to "Auto (Smart Fit)",
+                            3 to "3s Quick",
+                            5 to "5s Recommended",
+                            8 to "8s Detailed",
+                            12 to "12s Extended"
+                        ).forEach { (secs, lbl) ->
+                            val isChosen = config.previewShowcaseSeconds == secs
+                            FilterChip(
+                                selected = isChosen,
+                                onClick = { onUpdateConfig(config.copy(previewShowcaseSeconds = secs)) },
+                                label = { Text(lbl, fontSize = 10.5.sp) },
+                                modifier = Modifier
+                                    .height(28.dp)
+                                    .testTag("showcase_preset_$secs")
+                            )
+                        }
+                    }
+
+                    if (config.previewShowcaseSeconds > 0) {
+                        Slider(
+                            value = config.previewShowcaseSeconds.toFloat(),
+                            onValueChange = { onUpdateConfig(config.copy(previewShowcaseSeconds = it.roundToInt())) },
+                            valueRange = 2f..15f,
+                            steps = 12,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("showcase_duration_slider")
+                        )
+                    }
+
+                    // Show badge toggle
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onUpdateConfig(config.copy(showPreviewShowcaseBadge = !config.showPreviewShowcaseBadge)) }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Show Showcase Timer Badge in Rec Mode",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Switch(
+                            checked = config.showPreviewShowcaseBadge,
+                            onCheckedChange = { onUpdateConfig(config.copy(showPreviewShowcaseBadge = it)) },
+                            modifier = Modifier.testTag("show_showcase_badge_switch")
+                        )
+                    }
+                }
             }
 
             // Apply Button

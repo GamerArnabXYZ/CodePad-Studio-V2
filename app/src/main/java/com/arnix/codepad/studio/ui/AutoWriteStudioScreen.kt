@@ -297,10 +297,10 @@ fun AutoWriteStudioScreen(
         }
     }
 
-    // Auto-stop recording when code autowrite completes typing so final preview is captured cleanly
+    // Auto-stop recording only when both code autowrite and the post-typing preview showcase have finished
     LaunchedEffect(uiState.autoWriteFinishedNonce) {
-        if (uiState.autoWriteFinishedNonce > 0L && recorderState.isRecording) {
-            delay(1200L)
+        if (uiState.autoWriteFinishedNonce > 0L && recorderState.isRecording && !uiState.isPreviewShowcaseActive) {
+            delay(500L)
             ScreenRecorderEngine.stopServiceRecording(context)
             if (uiState.isRecordingMode) {
                 viewModel.exitRecordingMode(context)
@@ -308,8 +308,9 @@ fun AutoWriteStudioScreen(
         }
     }
 
-    LaunchedEffect(uiState.isAutoWritePlaying, recorderState.isRecording) {
+    LaunchedEffect(uiState.isAutoWritePlaying, uiState.isPreviewShowcaseActive, recorderState.isRecording) {
         if (!uiState.isAutoWritePlaying &&
+            !uiState.isPreviewShowcaseActive &&
             recorderState.isRecording &&
             uiState.typedCharCount > 0 &&
             uiState.autoWriteFullCode.isNotEmpty() &&
@@ -319,8 +320,8 @@ fun AutoWriteStudioScreen(
                 (uiState.autoWriteTab == CodeTab.STYLE_CSS && uiState.jsCode.isBlank()) ||
                 (uiState.autoWriteTab == CodeTab.INDEX_HTML && uiState.cssCode.isBlank() && uiState.jsCode.isBlank())
 
-            if (isFinalTab) {
-                delay(1200L)
+            if (isFinalTab && uiState.autoWriteFinishedNonce > 0L) {
+                delay(500L)
                 if (recorderState.isRecording) {
                     ScreenRecorderEngine.stopServiceRecording(context)
                     if (uiState.isRecordingMode) {
@@ -335,7 +336,7 @@ fun AutoWriteStudioScreen(
         viewModel.onAutoWriteFinished = {
             if (ScreenRecorderEngine.state.value.isRecording) {
                 coroutineScope.launch {
-                    delay(1200L)
+                    delay(500L)
                     ScreenRecorderEngine.stopServiceRecording(context)
                     if (viewModel.uiState.value.isRecordingMode) {
                         viewModel.exitRecordingMode(context)
@@ -985,32 +986,44 @@ fun AutoWriteStudioScreen(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
             ) {
-                NativeDomPreviewPanel(
-                    domNodes = uiState.autoWriteDomNodes,
-                    bodyStyle = uiState.autoWriteBodyStyle,
-                    onDomButtonClick = { fn -> viewModel.onNativeDomButtonClicked(fn) },
-                    onRefreshRunJs = { viewModel.forceReloadPreview() },
-                    htmlCode = uiState.autoWriteEffectiveHtml,
-                    cssCode = uiState.autoWriteEffectiveCss,
-                    jsCode = uiState.autoWriteEffectiveJs,
-                    runJs = !uiState.isAutoWritePlaying || uiState.autoWriteEffectiveJs.isNotBlank(),
-                    isProgressiveAutoWrite = uiState.isAutoWritePlaying,
-                    previewScaleMode = uiState.previewScaleMode,
-                    previewReloadNonce = uiState.previewReloadNonce,
-                    onCycleScaleMode = { viewModel.cyclePreviewScaleMode() },
-                    onToggleExpandHeight = { viewModel.togglePreviewExpandedHeight() },
-                    onWebConsoleLog = { level, msg, src, stack ->
-                        viewModel.onWebConsoleMessage(level, msg, src, stack)
-                    },
-                    onWebConsoleClear = { viewModel.onWebConsoleClear() },
-                    onClose = if (uiState.isRecordingMode) null else ({ viewModel.handleDoubleTapGesture() }),
-                    isRecordingMode = uiState.isRecordingMode,
-                    autoScrollPreview = uiState.isAutoWritePlaying,
-                    maxBodyHeight = if (uiState.isRecordingMode) 4000.dp else uiState.previewSectionHeightDp.dp,
-                    onResizeDeltaDp = { deltaDp ->
-                        viewModel.adjustPreviewSectionHeight(deltaDp)
+                Box(modifier = Modifier.fillMaxSize()) {
+                    NativeDomPreviewPanel(
+                        domNodes = uiState.autoWriteDomNodes,
+                        bodyStyle = uiState.autoWriteBodyStyle,
+                        onDomButtonClick = { fn -> viewModel.onNativeDomButtonClicked(fn) },
+                        onRefreshRunJs = { viewModel.forceReloadPreview() },
+                        htmlCode = uiState.autoWriteEffectiveHtml,
+                        cssCode = uiState.autoWriteEffectiveCss,
+                        jsCode = uiState.autoWriteEffectiveJs,
+                        runJs = !uiState.isAutoWritePlaying || uiState.autoWriteEffectiveJs.isNotBlank() || uiState.isPreviewShowcaseActive,
+                        isProgressiveAutoWrite = uiState.isAutoWritePlaying,
+                        previewScaleMode = uiState.previewScaleMode,
+                        previewReloadNonce = uiState.previewReloadNonce,
+                        onCycleScaleMode = { viewModel.cyclePreviewScaleMode() },
+                        onToggleExpandHeight = { viewModel.togglePreviewExpandedHeight() },
+                        onWebConsoleLog = { level, msg, src, stack ->
+                            viewModel.onWebConsoleMessage(level, msg, src, stack)
+                        },
+                        onWebConsoleClear = { viewModel.onWebConsoleClear() },
+                        onClose = if (uiState.isRecordingMode) null else ({ viewModel.handleDoubleTapGesture() }),
+                        isRecordingMode = uiState.isRecordingMode,
+                        autoScrollPreview = uiState.isAutoWritePlaying,
+                        maxBodyHeight = if (uiState.isRecordingMode) 4000.dp else uiState.previewSectionHeightDp.dp,
+                        onResizeDeltaDp = { deltaDp ->
+                            viewModel.adjustPreviewSectionHeight(deltaDp)
+                        }
+                    )
+
+                    if (uiState.isPreviewShowcaseActive && uiState.recordingLayoutConfig.showPreviewShowcaseBadge) {
+                        PreviewShowcaseBadge(
+                            remainingSeconds = uiState.previewShowcaseRemainingSec,
+                            totalSeconds = uiState.previewShowcaseTotalSec,
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 10.dp)
+                        )
                     }
-                )
+                }
             }
         }
 
@@ -1267,6 +1280,58 @@ fun AutoWriteStudioScreen(
                     viewModel.setRecordingLayoutSheetOpen(false)
                 }
             )
+        }
+    }
+}
+
+/**
+ * Floating badge displayed during the post-typing preview showcase period.
+ * Shows viewers and creator how many seconds the live output preview is being showcased.
+ */
+@Composable
+private fun PreviewShowcaseBadge(
+    remainingSeconds: Int,
+    totalSeconds: Int,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+        border = BorderStroke(1.2.dp, MaterialTheme.colorScheme.primary),
+        shadowElevation = 8.dp,
+        modifier = modifier.testTag("preview_showcase_badge")
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF10B981))
+            )
+            Text(
+                text = "LIVE OUTPUT SHOWCASE",
+                fontFamily = JetBrainsMonoFontFamily,
+                fontWeight = FontWeight.Bold,
+                fontSize = 9.uiSp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary
+            ) {
+                Text(
+                    text = "${remainingSeconds}s",
+                    fontFamily = JetBrainsMonoFontFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 8.5.uiSp,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.5.dp)
+                )
+            }
         }
     }
 }

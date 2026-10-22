@@ -2632,6 +2632,18 @@ private fun RecordingFlowSectionContent(
                                 modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                             )
                         }
+
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                        ) {
+                            Text(
+                                text = "Showcase: " + if (recordingLayoutConfig.previewShowcaseSeconds == 0) "Auto-Balanced" else "${recordingLayoutConfig.previewShowcaseSeconds}s",
+                                fontSize = 9.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                            )
+                        }
                     }
                 }
             }

@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
@@ -167,7 +168,9 @@ object AutoSpeedOptimizer {
         showEndCta: Boolean,
         target: AutoDurationTarget,
         manualSpeedLevel: Int,
-        manualTurbo: Boolean
+        manualTurbo: Boolean,
+        hasPreviewShowcase: Boolean = false,
+        showcaseDurationMs: Long = 0L
     ): TypingSequenceMetrics {
         val codes = if (isAutoChain) {
             listOf(htmlCode, cssCode, jsCode)
@@ -202,13 +205,14 @@ object AutoSpeedOptimizer {
         } else {
             400L
         }
+        val effectiveShowcaseMs = if (hasPreviewShowcase) showcaseDurationMs else 0L
 
         if (target == AutoDurationTarget.MANUAL) {
             val level = manualSpeedLevel.coerceIn(1, 20)
             val baseDelay = max(10f, 108f - (level * 4.8f))
             val effectiveDelay = if (manualTurbo) max(6f, baseDelay / 2f) else baseDelay
             val typingMs = (totalWeighted * effectiveDelay).toLong()
-            val estSec = max(1, ((typingMs + transitionOverheadMs + outroOverheadMs) / 1000f).roundToInt())
+            val estSec = max(1, ((typingMs + transitionOverheadMs + outroOverheadMs + effectiveShowcaseMs) / 1000f).roundToInt())
             return TypingSequenceMetrics(
                 totalChars = totalChars,
                 effectiveSteps = totalSteps,
@@ -220,28 +224,32 @@ object AutoSpeedOptimizer {
         }
 
         val targetTotalMs = target.seconds * 1000L
-        val availableTypingMs = max(2500L, targetTotalMs - transitionOverheadMs - outroOverheadMs)
+        val availableTypingMs = max(
+            2500L,
+            targetTotalMs - transitionOverheadMs - outroOverheadMs - effectiveShowcaseMs
+        )
         val rawBaseDelayMs = availableTypingMs.toFloat() / max(1f, totalWeighted)
 
         // Cap max delay per unit so short snippets still type at a crisp creator pace
         val maxNaturalDelayMs = when (target) {
-            AutoDurationTarget.SEC_15 -> 16f
-            AutoDurationTarget.SEC_20 -> 22f
-            AutoDurationTarget.SEC_30 -> 30f
-            AutoDurationTarget.SEC_45 -> 38f
-            AutoDurationTarget.SEC_60 -> 44f
-            AutoDurationTarget.MANUAL -> 44f
+            AutoDurationTarget.SEC_15 -> 14f
+            AutoDurationTarget.SEC_20 -> 18f
+            AutoDurationTarget.SEC_30 -> 26f
+            AutoDurationTarget.SEC_45 -> 34f
+            AutoDurationTarget.SEC_60 -> 40f
+            AutoDurationTarget.MANUAL -> 40f
         }
 
         val clampedBaseDelay = min(rawBaseDelayMs, maxNaturalDelayMs)
         val recommendedLevel = ((108f - clampedBaseDelay) / 4.8f).roundToInt().coerceIn(1, 20)
         val needsBurst = rawBaseDelayMs < 11f
         val actualTypingMs = (totalWeighted * clampedBaseDelay).toLong().coerceAtMost(availableTypingMs)
+        val totalEstMs = actualTypingMs + transitionOverheadMs + outroOverheadMs + effectiveShowcaseMs
         val estSec = max(
             1,
             min(
                 target.seconds,
-                ((actualTypingMs + transitionOverheadMs + outroOverheadMs) / 1000f).roundToInt()
+                (totalEstMs / 1000f).roundToInt()
             )
         )
 
@@ -393,7 +401,10 @@ data class StudioUiState(
     val recordingLayoutConfig: RecordingLayoutConfig = RecordingLayoutConfig(),
     val isRecordingLayoutSheetOpen: Boolean = false,
     val isEndFullscreenPreviewRevealed: Boolean = false,
-    val autoWriteFinishedNonce: Long = 0L
+    val autoWriteFinishedNonce: Long = 0L,
+    val isPreviewShowcaseActive: Boolean = false,
+    val previewShowcaseRemainingSec: Int = 0,
+    val previewShowcaseTotalSec: Int = 0
 ) {
     val activeCode: String
         get() = when (activeTab) {
@@ -1497,6 +1508,15 @@ class StudioViewModel(
 
     private fun syncAutoSpeedMetricsIfNeeded() {
         _uiState.update { current ->
+            val hasPreviewShowcase = current.isFloatingPreviewOpen ||
+                current.recordingLayoutConfig.layoutMode != RecordingLayoutMode.EDITOR_ONLY ||
+                current.autoRevealPreviewOnFinish
+            val showcaseMs = if (hasPreviewShowcase) {
+                current.recordingLayoutConfig.getEffectiveShowcaseDurationMs(current.autoDurationTarget)
+            } else {
+                0L
+            }
+
             val metrics = AutoSpeedOptimizer.analyze(
                 htmlCode = current.htmlCode,
                 cssCode = current.cssCode,
@@ -1506,7 +1526,9 @@ class StudioViewModel(
                 showEndCta = current.showEndCtaAnimation,
                 target = current.autoDurationTarget,
                 manualSpeedLevel = current.speedLevel,
-                manualTurbo = current.isTurboMode
+                manualTurbo = current.isTurboMode,
+                hasPreviewShowcase = hasPreviewShowcase,
+                showcaseDurationMs = showcaseMs
             )
             if (current.autoDurationTarget == AutoDurationTarget.MANUAL) {
                 current.copy(sequenceMetrics = metrics)
@@ -2050,10 +2072,12 @@ class StudioViewModel(
     fun setRecordingLayoutMode(mode: RecordingLayoutMode) {
         val updated = _uiState.value.recordingLayoutConfig.copy(layoutMode = mode)
         _uiState.update { it.copy(recordingLayoutConfig = updated) }
+        syncAutoSpeedMetricsIfNeeded()
     }
 
     fun updateRecordingLayoutConfig(config: RecordingLayoutConfig) {
         _uiState.update { it.copy(recordingLayoutConfig = config) }
+        syncAutoSpeedMetricsIfNeeded()
     }
 
     fun setRecordingLayoutSheetOpen(open: Boolean) {
@@ -2064,6 +2088,7 @@ class StudioViewModel(
         val clamped = editorWeight.coerceIn(0.20f, 0.80f)
         val updated = _uiState.value.recordingLayoutConfig.copy(editorWeight = clamped)
         _uiState.update { it.copy(recordingLayoutConfig = updated) }
+        syncAutoSpeedMetricsIfNeeded()
     }
 
     fun setEndFullscreenPreviewRevealed(revealed: Boolean) {
@@ -2117,13 +2142,16 @@ class StudioViewModel(
 
     fun exitRecordingMode(context: Context? = null) {
         countdownJob?.cancel()
+        showcaseJob?.cancel()
         BackgroundMusicEngine.stopPlayback()
         _uiState.update {
             it.copy(
                 isRecordingMode = false,
                 recordingCountdownSeconds = 0,
                 isRecordingStartingDelay = false,
-                isEndFullscreenPreviewRevealed = false
+                isEndFullscreenPreviewRevealed = false,
+                isPreviewShowcaseActive = false,
+                previewShowcaseRemainingSec = 0
             )
         }
         if (context != null && ScreenRecorderEngine.state.value.isRecording) {
@@ -2132,6 +2160,7 @@ class StudioViewModel(
     }
 
     fun restartAutoWrite() {
+        showcaseJob?.cancel()
         typewriterJob?.cancel()
         clearRuntimeDomState()
         _uiState.update {
@@ -2141,7 +2170,9 @@ class StudioViewModel(
                 autoWriteCurrentColumn = 1,
                 isAutoWritePlaying = false,
                 isEndCtaActive = false,
-                isEndFullscreenPreviewRevealed = false
+                isEndFullscreenPreviewRevealed = false,
+                isPreviewShowcaseActive = false,
+                previewShowcaseRemainingSec = 0
             )
         }
         updateProgressiveAutoWritePreview(force = true)
@@ -2244,24 +2275,41 @@ class StudioViewModel(
                     } else {
                         updateProgressiveAutoWritePreview(force = true)
                         TypingSoundEngine.stopAll()
-                        BackgroundMusicEngine.stopPlayback()
-                        val isRevealMode = _uiState.value.recordingLayoutConfig.layoutMode == RecordingLayoutMode.EDITOR_THEN_FULL_PREVIEW_AT_END
+                        val state = _uiState.value
+                        val hasPreview = state.isFloatingPreviewOpen ||
+                            state.recordingLayoutConfig.layoutMode != RecordingLayoutMode.EDITOR_ONLY ||
+                            state.autoRevealPreviewOnFinish
+                        val isRevealMode = state.recordingLayoutConfig.layoutMode == RecordingLayoutMode.EDITOR_THEN_FULL_PREVIEW_AT_END
+
+                        val showcaseMs = if (hasPreview) {
+                            state.recordingLayoutConfig.getEffectiveShowcaseDurationMs(state.autoDurationTarget)
+                        } else {
+                            0L
+                        }
+
                         _uiState.update {
                             it.copy(
                                 isAutoWritePlaying = false,
                                 isFloatingPreviewOpen = if (it.autoRevealPreviewOnFinish || isRevealMode) true else it.isFloatingPreviewOpen,
-                                isEndCtaActive = it.showEndCtaAnimation,
-                                autoWriteFinishedNonce = System.currentTimeMillis()
+                                isEndCtaActive = it.showEndCtaAnimation
                             )
                         }
+
                         if (isRevealMode) {
-                            val delayMs = _uiState.value.recordingLayoutConfig.revealDelayMs
+                            val delayMs = state.recordingLayoutConfig.revealDelayMs
                             viewModelScope.launch {
                                 delay(delayMs)
                                 _uiState.update { it.copy(isEndFullscreenPreviewRevealed = true) }
                             }
                         }
-                        onAutoWriteFinished?.invoke()
+
+                        if (hasPreview && showcaseMs > 0L) {
+                            startPreviewShowcase(showcaseMs)
+                        } else {
+                            BackgroundMusicEngine.stopPlayback()
+                            _uiState.update { it.copy(autoWriteFinishedNonce = System.currentTimeMillis()) }
+                            onAutoWriteFinished?.invoke()
+                        }
                         break
                     }
                 }
@@ -2416,15 +2464,71 @@ class StudioViewModel(
         } else {
             400L
         }
-        val usableTargetMs = max(2500L, (target.seconds * 1000L) - outroReserveMs)
+        val hasPreview = state.isFloatingPreviewOpen ||
+            state.recordingLayoutConfig.layoutMode != RecordingLayoutMode.EDITOR_ONLY ||
+            state.autoRevealPreviewOnFinish
+        val showcaseReserveMs = if (hasPreview) {
+            state.recordingLayoutConfig.getEffectiveShowcaseDurationMs(target)
+        } else {
+            0L
+        }
+        val usableTargetMs = max(2500L, (target.seconds * 1000L) - outroReserveMs - showcaseReserveMs)
         return now + (usableTargetMs * remFraction).toLong()
+    }
+
+    private var showcaseJob: Job? = null
+
+    private fun startPreviewShowcase(showcaseMs: Long) {
+        showcaseJob?.cancel()
+        showcaseJob = viewModelScope.launch {
+            val totalSec = max(1, (showcaseMs / 1000f).roundToInt())
+            _uiState.update {
+                it.copy(
+                    isPreviewShowcaseActive = true,
+                    previewShowcaseTotalSec = totalSec,
+                    previewShowcaseRemainingSec = totalSec
+                )
+            }
+
+            // Ensure preview DOM has top-level JS active so animations, canvas, timers run during showcase
+            rebuildNativePreview(runTopLevelJs = true, logSystemBoot = false)
+
+            val startTime = System.currentTimeMillis()
+            while (isActive) {
+                val elapsed = System.currentTimeMillis() - startTime
+                val remainingMs = showcaseMs - elapsed
+                if (remainingMs <= 0L) break
+
+                val remSec = max(1, ceil(remainingMs / 1000f).toInt())
+                _uiState.update { it.copy(previewShowcaseRemainingSec = remSec) }
+                delay(200L)
+            }
+
+            // Showcase completed cleanly!
+            _uiState.update {
+                it.copy(
+                    isPreviewShowcaseActive = false,
+                    previewShowcaseRemainingSec = 0,
+                    autoWriteFinishedNonce = System.currentTimeMillis()
+                )
+            }
+            BackgroundMusicEngine.stopPlayback()
+            onAutoWriteFinished?.invoke()
+        }
     }
 
     fun pauseAutoWrite() {
         typewriterJob?.cancel()
+        showcaseJob?.cancel()
         TypingSoundEngine.stopAll()
         BackgroundMusicEngine.stopPlayback()
-        _uiState.update { it.copy(isAutoWritePlaying = false) }
+        _uiState.update {
+            it.copy(
+                isAutoWritePlaying = false,
+                isPreviewShowcaseActive = false,
+                previewShowcaseRemainingSec = 0
+            )
+        }
     }
 
     // --- Productivity Suite: Undo / Redo ---
